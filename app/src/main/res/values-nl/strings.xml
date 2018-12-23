@@ -14,7 +14,7 @@
     <string name="navigation_drawer_open">Open navigatiemenu</string>
     <string name="navigation_drawer_close">Sluit navigatiemenu</string>
 
-    <string name="add_catalog">Voeg Boek Catalogus</string>
+    <string name="add_catalog">Voeg Boek Catalogus Toe</string>
     <string name="books_catalogs">Catalogi</string>
     <string name="loading_book">Boek Laden</string>
     <string name="open_file">Open Bestand</string>
