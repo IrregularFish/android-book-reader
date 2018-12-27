@@ -25,14 +25,13 @@ import android.view.MenuItem;
 import android.view.View;
 import android.view.ViewGroup;
 import android.view.ViewParent;
-import android.webkit.MimeTypeMap;
 import android.widget.AdapterView;
 import android.widget.ImageView;
 import android.widget.LinearLayout;
 import android.widget.ProgressBar;
 import android.widget.TextView;
 
-import com.github.axet.androidlibrary.services.FileProvider;
+import com.github.axet.androidlibrary.net.HttpClient;
 import com.github.axet.androidlibrary.services.StorageProvider;
 import com.github.axet.androidlibrary.widgets.CacheImagesAdapter;
 import com.github.axet.androidlibrary.widgets.CacheImagesRecyclerAdapter;
@@ -45,6 +44,8 @@ import com.github.axet.bookreader.app.BookApplication;
 import com.github.axet.bookreader.app.Storage;
 import com.github.axet.bookreader.widgets.BookmarksDialog;
 import com.github.axet.bookreader.widgets.FBReaderView;
+
+import org.apache.commons.io.IOUtils;
 
 import java.io.File;
 import java.io.FileInputStream;
@@ -338,14 +339,11 @@ public class LibraryFragment extends Fragment implements MainActivity.SearchList
         public void downloadTaskUpdate(CacheImagesAdapter.DownloadImageTask task, Object item, Object view) {
             super.downloadTaskUpdate(task, item, view);
             BookHolder h = new BookHolder((View) view);
-
             Storage.Book b = (Storage.Book) item;
-
             if (b.cover != null && b.cover.exists()) {
-                ImageView image = (ImageView) ((View) view).findViewById(R.id.book_cover);
                 try {
                     Bitmap bm = BitmapFactory.decodeStream(new FileInputStream(b.cover));
-                    image.setImageBitmap(bm);
+                    h.image.setImageBitmap(bm);
                 } catch (Exception e) {
                     throw new RuntimeException(e);
                 }
@@ -357,15 +355,20 @@ public class LibraryFragment extends Fragment implements MainActivity.SearchList
     public static abstract class BooksAdapter extends CacheImagesRecyclerAdapter<BooksAdapter.BookHolder> {
         String filter;
         FragmentHolder holder;
+        HttpClient client = new HttpClient(); // images client
 
         public static class BookHolder extends RecyclerView.ViewHolder {
             TextView aa;
             TextView tt;
+            ImageView image;
+            ProgressBar progress;
 
             public BookHolder(View itemView) {
                 super(itemView);
                 aa = (TextView) itemView.findViewById(R.id.book_authors);
                 tt = (TextView) itemView.findViewById(R.id.book_title);
+                image = (ImageView) itemView.findViewById(R.id.book_cover);
+                progress = (ProgressBar) itemView.findViewById(R.id.book_progress);
             }
         }
 
@@ -403,8 +406,7 @@ public class LibraryFragment extends Fragment implements MainActivity.SearchList
         public BookHolder onCreateViewHolder(ViewGroup parent, int viewType) {
             LayoutInflater inflater = LayoutInflater.from(getContext());
             View convertView = inflater.inflate(viewType, parent, false);
-            BookHolder h = new BookHolder(convertView);
-            return h;
+            return new BookHolder(convertView);
         }
 
         @Override
@@ -424,43 +426,34 @@ public class LibraryFragment extends Fragment implements MainActivity.SearchList
                     return true;
                 }
             });
-
             setText(h.aa, getAuthors(position));
             setText(h.tt, getTitle(position));
         }
 
         @Override
+        public Bitmap downloadImage(Uri cover, File f) throws IOException {
+            HttpClient.DownloadResponse w = client.getResponse(null, cover.toString());
+            FileOutputStream out = new FileOutputStream(f);
+            IOUtils.copy(w.getInputStream(), out);
+            w.getInputStream().close();
+            out.close();
+            Bitmap bm = CacheImagesAdapter.createScaled(new FileInputStream(f));
+            FileOutputStream os = new FileOutputStream(f);
+            bm.compress(Bitmap.CompressFormat.PNG, 100, os);
+            os.close();
+            return bm;
+        }
+
+        @Override
         public void downloadTaskUpdate(CacheImagesAdapter.DownloadImageTask task, Object item, Object view) {
-            View convertView = (View) view;
-            ImageView image = (ImageView) convertView.findViewById(R.id.book_cover);
-            ProgressBar progress = (ProgressBar) convertView.findViewById(R.id.book_progress);
-            updateView(task, image, progress);
+            BookHolder h = new BookHolder((View) view);
+            updateView(task, h.image, h.progress);
         }
 
         @Override
         public Bitmap downloadImageTask(CacheImagesAdapter.DownloadImageTask task) {
             Uri u = (Uri) task.item;
-            Bitmap bm = downloadImage(u);
-            if (bm == null)
-                return null;
-            if (bm.getWidth() > Storage.COVER_SIZE || bm.getHeight() > Storage.COVER_SIZE) {
-                try {
-                    File cover = CacheImagesAdapter.cacheUri(getContext(), u);
-                    int m = Math.max(bm.getWidth(), bm.getHeight());
-                    float ratio = Storage.COVER_SIZE / (float) m;
-                    Bitmap sbm = Bitmap.createScaledBitmap(bm, (int) (bm.getWidth() * ratio), (int) (bm.getHeight() * ratio), true);
-                    if (sbm == bm)
-                        return bm;
-                    bm.recycle();
-                    FileOutputStream os = new FileOutputStream(cover);
-                    sbm.compress(Bitmap.CompressFormat.PNG, 100, os);
-                    os.close();
-                    return sbm;
-                } catch (IOException e) {
-                    throw new RuntimeException(e);
-                }
-            }
-            return bm;
+            return downloadImage(u);
         }
 
         void setText(TextView t, String s) {
@@ -553,17 +546,17 @@ public class LibraryFragment extends Fragment implements MainActivity.SearchList
                             d.show();
                         }
                         if (item.getItemId() == R.id.action_open) {
-                            String ext = storage.getExt(b.url);
+                            String ext = Storage.getExt(getContext(), b.url);
                             String n = Storage.getTitle(b.info) + "." + ext;
                             Intent open = StorageProvider.getProvider().openIntent(b.url, n);
                             startActivity(open);
                         }
                         if (item.getItemId() == R.id.action_share) {
-                            String ext = storage.getExt(b.url);
+                            String ext = Storage.getExt(getContext(), b.url);
                             String t = Storage.getTitle(b.info) + "." + ext;
-                            String name = storage.getName(b.url);
+                            String name = Storage.getName(getContext(), b.url);
                             String type = Storage.getTypeByName(name);
-                            Intent share = StorageProvider.getProvider().shareIntent(b.url, t, type, name);
+                            Intent share = StorageProvider.getProvider().shareIntent(b.url, t, type, t);
                             startActivity(share);
                         }
                         if (item.getItemId() == R.id.action_delete) {
@@ -668,6 +661,17 @@ public class LibraryFragment extends Fragment implements MainActivity.SearchList
                 public void selected(Storage.Book b, Storage.Bookmark bm) {
                     MainActivity main = ((MainActivity) getActivity());
                     main.openBook(b.url, new FBReaderView.ZLTextIndexPosition(bm.start, bm.end));
+                }
+
+                @Override
+                public void save(Storage.Book book, Storage.Bookmark bm) {
+                    storage.save(book);
+                }
+
+                @Override
+                public void delete(Storage.Book book, Storage.Bookmark bm) {
+                    book.info.bookmarks.remove(bm);
+                    storage.save(book);
                 }
             };
             dialog.load(books.all);

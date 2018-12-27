@@ -12,6 +12,7 @@ import android.content.pm.PackageInfo;
 import android.content.pm.PackageManager;
 import android.net.Uri;
 import android.os.Bundle;
+import android.os.Handler;
 import android.preference.PreferenceManager;
 import android.support.annotation.NonNull;
 import android.support.design.internal.NavigationMenuItemView;
@@ -24,6 +25,7 @@ import android.support.v4.view.MenuItemCompat;
 import android.support.v4.widget.DrawerLayout;
 import android.support.v7.app.ActionBarDrawerToggle;
 import android.support.v7.app.AlertDialog;
+import android.support.v7.widget.AppCompatImageButton;
 import android.support.v7.widget.PopupMenu;
 import android.util.Log;
 import android.view.KeyEvent;
@@ -33,13 +35,14 @@ import android.view.MenuItem;
 import android.view.SubMenu;
 import android.view.View;
 import android.view.ViewGroup;
-import android.widget.ImageButton;
 import android.widget.LinearLayout;
 import android.widget.ProgressBar;
 import android.widget.TextView;
 
+import com.github.axet.androidlibrary.app.FileTypeDetector;
 import com.github.axet.androidlibrary.widgets.AboutPreferenceCompat;
 import com.github.axet.androidlibrary.widgets.CacheImagesAdapter;
+import com.github.axet.androidlibrary.widgets.ErrorDialog;
 import com.github.axet.androidlibrary.widgets.OpenChoicer;
 import com.github.axet.androidlibrary.widgets.OpenFileDialog;
 import com.github.axet.androidlibrary.widgets.SearchView;
@@ -68,6 +71,7 @@ import java.io.File;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.Comparator;
+import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.TreeMap;
@@ -78,6 +82,7 @@ public class MainActivity extends FullscreenActivity implements NavigationView.O
     public static final String LIBRARY = "library";
     public static final String ADD_CATALOG = "add_catalog";
     public static final String SCHEME_CATALOG = "catalog";
+    public static final String VIEW_CATALOG = "VIEW_CATALOG";
 
     public static final int RESULT_FILE = 1;
     public static final int RESULT_ADD_CATALOG = 2;
@@ -96,56 +101,10 @@ public class MainActivity extends FullscreenActivity implements NavigationView.O
     BroadcastReceiver receiver = new BroadcastReceiver() {
         @Override
         public void onReceive(Context context, Intent intent) {
-            if (intent.getAction().equals(FBReaderView.ACTION_MENU)) {
+            if (intent.getAction().equals(FBReaderView.ACTION_MENU))
                 toggle();
-            }
         }
     };
-
-    public static String toString(Throwable e) {
-        while (e.getCause() != null)
-            e = e.getCause();
-        String msg = e.getMessage();
-        if (msg == null || msg.isEmpty())
-            msg = e.getClass().getSimpleName();
-        return msg;
-    }
-
-    public void Post(final Throwable e) {
-        Log.e(TAG, "Error", e);
-        runOnUiThread(new Runnable() {
-            @Override
-            public void run() {
-                Error(MainActivity.toString(e));
-            }
-        });
-    }
-
-    public void Post(final String e) {
-        runOnUiThread(new Runnable() {
-            @Override
-            public void run() {
-                Error(e);
-            }
-        });
-    }
-
-    public void Error(Throwable e) {
-        Log.e(TAG, "Error", e);
-        Error(toString(e));
-    }
-
-    public void Error(String msg) {
-        AlertDialog.Builder builder = new AlertDialog.Builder(this);
-        builder.setTitle("Error");
-        builder.setMessage(msg);
-        builder.setPositiveButton(android.R.string.ok, new DialogInterface.OnClickListener() {
-            @Override
-            public void onClick(DialogInterface dialog, int which) {
-            }
-        });
-        builder.show();
-    }
 
     public interface SearchListener {
         String getHint();
@@ -188,9 +147,78 @@ public class MainActivity extends FullscreenActivity implements NavigationView.O
         return null;
     }
 
-    @Override
-    protected void attachBaseContext(Context newBase) {
-        super.attachBaseContext(newBase);
+    public static class ResourcesMap extends HashMap<String, String> {
+        public ResourcesMap(Context context, int k, int v) {
+            String[] kk = context.getResources().getStringArray(k);
+            String[] vv = context.getResources().getStringArray(v);
+            for (int i = 0; i < kk.length; i++) {
+                put(kk[i], vv[i]);
+            }
+        }
+    }
+
+    public static class ProgressDialog extends AlertDialog.Builder {
+        public Handler handler = new Handler();
+        public ProgressBar load;
+        public ProgressBar v;
+        public TextView text;
+        public Storage.Progress progress = new Storage.Progress() {
+            @Override
+            public void progress(final long bytes, final long total) {
+                handler.post(new Runnable() {
+                    @Override
+                    public void run() {
+                        ProgressDialog.this.progress(bytes, total);
+                    }
+                });
+            }
+        };
+
+        public ProgressDialog(Context context) {
+            super(context);
+            int dp10 = ThemeUtils.dp2px(context, 10);
+
+            final LinearLayout ll = new LinearLayout(context);
+            ll.setOrientation(LinearLayout.VERTICAL);
+            v = new ProgressBar(context);
+            v.setIndeterminate(true);
+            v.setPadding(dp10, dp10, dp10, dp10);
+            ll.addView(v);
+            load = new ProgressBar(context, null, android.R.attr.progressBarStyleHorizontal);
+            load.setPadding(dp10, dp10, dp10, dp10);
+            load.setMax(100);
+            ll.addView(load);
+            text = new TextView(context);
+            text.setPadding(dp10, dp10, dp10, dp10);
+            ll.addView(text);
+            load.setVisibility(View.GONE);
+            text.setVisibility(View.GONE);
+
+            setTitle(R.string.loading_book);
+            setView(ll);
+            setCancelable(false);
+            setPositiveButton(android.R.string.cancel, new DialogInterface.OnClickListener() {
+                @Override
+                public void onClick(DialogInterface dialog, int which) {
+                }
+            });
+        }
+
+        public void progress(long bytes, long total) {
+            String str = BookApplication.formatSize(getContext(), bytes);
+            if (total > 0) {
+                str += " / " + BookApplication.formatSize(getContext(), total);
+                load.setProgress((int) (bytes * 100 / total));
+                load.setVisibility(View.VISIBLE);
+                v.setVisibility(View.GONE);
+            } else {
+                load.setVisibility(View.GONE);
+                v.setVisibility(View.VISIBLE);
+            }
+            str += String.format(" (%s%s)", BookApplication.formatSize(getContext(), progress.info.getCurrentSpeed()), getContext().getString(R.string.per_second));
+            text.setText(str);
+            text.setVisibility(View.VISIBLE);
+        }
     }
 
     @Override
@@ -250,7 +278,7 @@ public class MainActivity extends FullscreenActivity implements NavigationView.O
             intent.putExtra("url", ct.getId());
             m.setIntent(intent);
             m.setIcon(R.drawable.ic_drag_handle_black_24dp);
-            ImageButton b = new ImageButton(this);
+            AppCompatImageButton b = new AppCompatImageButton(this);
             b.setColorFilter(accent);
             b.setImageResource(R.drawable.ic_delete_black_24dp);
             b.setOnClickListener(new View.OnClickListener() {
@@ -296,6 +324,8 @@ public class MainActivity extends FullscreenActivity implements NavigationView.O
                 }
             }
             super.onBackPressed();
+            if (fm.getBackStackEntryCount() == 0)
+                onResume(); // udpate theme if changed
         }
     }
 
@@ -304,6 +334,14 @@ public class MainActivity extends FullscreenActivity implements NavigationView.O
         getMenuInflater().inflate(R.menu.main, menu);
 
         MenuItem searchMenu = menu.findItem(R.id.action_search);
+
+        final SharedPreferences shared = PreferenceManager.getDefaultSharedPreferences(this);
+        MenuItem theme = menu.findItem(R.id.action_theme);
+        String t = shared.getString(BookApplication.PREFERENCE_THEME, "");
+        String d = getString(R.string.Theme_Dark);
+        theme.setIcon(t.equals(d) ? R.drawable.ic_brightness_night_white_24dp : R.drawable.ic_brightness_day_white_24dp);
+        ResourcesMap map = new ResourcesMap(this, R.array.theme_value, R.array.theme_text);
+        theme.setTitle(map.get(getString(t.equals(d) ? R.string.Theme_Dark : R.string.Theme_Light)));
 
         final SearchView searchView = (SearchView) MenuItemCompat.getActionView(searchMenu);
         searchView.setOnQueryTextListener(new SearchView.OnQueryTextListener() {
@@ -367,12 +405,8 @@ public class MainActivity extends FullscreenActivity implements NavigationView.O
 
     @Override
     public boolean onOptionsItemSelected(MenuItem item) {
-        // Handle action bar item clicks here. The action bar will
-        // automatically handle clicks on the Home/Up button, so long
-        // as you specify a parent activity in AndroidManifest.xml.
         int id = item.getItemId();
 
-        //noinspection SimplifiableIfStatement
         if (id == R.id.action_about) {
             AboutPreferenceCompat.buildDialog(this, R.raw.about).show();
             return true;
@@ -394,7 +428,7 @@ public class MainActivity extends FullscreenActivity implements NavigationView.O
                         reloadMenu();
                         openLibrary(ct);
                     } catch (Exception e) {
-                        Post(e);
+                        ErrorDialog.Post(MainActivity.this, e);
                     }
                 }
             };
@@ -415,7 +449,7 @@ public class MainActivity extends FullscreenActivity implements NavigationView.O
                         reloadMenu();
                         openLibrary(ct);
                     } catch (Exception e) {
-                        Post(e);
+                        ErrorDialog.Post(MainActivity.this, e);
                     }
                 }
             };
@@ -455,6 +489,16 @@ public class MainActivity extends FullscreenActivity implements NavigationView.O
             choicer.setStorageAccessFramework(this, RESULT_FILE);
             choicer.setPermissionsDialog(this, Storage.PERMISSIONS_RO, RESULT_FILE);
             choicer.show(old);
+        }
+
+        if (id == R.id.action_theme) {
+            SharedPreferences.Editor edit = shared.edit();
+            String t = shared.getString(BookApplication.PREFERENCE_THEME, "");
+            String d = getString(R.string.Theme_Dark);
+            edit.putString(BookApplication.PREFERENCE_THEME, t.equals(d) ? getString(R.string.Theme_Light) : d);
+            edit.commit();
+            restartActivity();
+            return true;
         }
 
         return super.onOptionsItemSelected(item);
@@ -513,39 +557,17 @@ public class MainActivity extends FullscreenActivity implements NavigationView.O
             u = intent.getData();
         if (u == null)
             return;
+        if (a.equals(VIEW_CATALOG)) {
+            openLibrary(catalogs.find(u.toString()));
+            return;
+        }
         loadBook(u, null);
     }
 
     public void loadBook(final Uri u, final Runnable success) {
-        int dp10 = ThemeUtils.dp2px(this, 10);
-
-        final LinearLayout ll = new LinearLayout(this);
-        ll.setOrientation(LinearLayout.VERTICAL);
-        final ProgressBar v = new ProgressBar(this);
-        v.setIndeterminate(true);
-        v.setPadding(dp10, dp10, dp10, dp10);
-        ll.addView(v);
-        final ProgressBar load = new ProgressBar(this, null, android.R.attr.progressBarStyleHorizontal);
-        load.setPadding(dp10, dp10, dp10, dp10);
-        load.setMax(100);
-        ll.addView(load);
-        final TextView text = new TextView(this);
-        text.setPadding(dp10, dp10, dp10, dp10);
-        ll.addView(text);
-        load.setVisibility(View.GONE);
-
-        AlertDialog.Builder builder = new AlertDialog.Builder(this);
-        builder.setTitle(R.string.loading_book);
-        builder.setView(ll);
-        builder.setCancelable(false);
-        builder.setPositiveButton(android.R.string.cancel, new DialogInterface.OnClickListener() {
-            @Override
-            public void onClick(DialogInterface dialog, int which) {
-            }
-        });
+        final ProgressDialog builder = new ProgressDialog(this);
         final AlertDialog d = builder.create();
         d.show();
-
         Thread thread = new Thread("load book") {
             @Override
             public void run() {
@@ -574,28 +596,7 @@ public class MainActivity extends FullscreenActivity implements NavigationView.O
                         });
                         return;
                     }
-                    final Storage.Book book = storage.load(u, new Storage.Progress() {
-                        @Override
-                        public void progress(final long bytes, final long total) {
-                            runOnUiThread(new Runnable() {
-                                @Override
-                                public void run() {
-                                    String str = BookApplication.formatSize(MainActivity.this, bytes);
-                                    if (total > 0) {
-                                        str += " / " + BookApplication.formatSize(MainActivity.this, total);
-                                        load.setProgress((int) (bytes * 100 / total));
-                                        load.setVisibility(View.VISIBLE);
-                                        v.setVisibility(View.GONE);
-                                    } else {
-                                        load.setVisibility(View.GONE);
-                                        v.setVisibility(View.VISIBLE);
-                                    }
-                                    str += String.format(" (%s%s)", BookApplication.formatSize(MainActivity.this, info.getCurrentSpeed()), getString(R.string.per_second));
-                                    text.setText(str);
-                                }
-                            });
-                        }
-                    });
+                    final Storage.Book book = storage.load(u, builder.progress);
                     runOnUiThread(new Runnable() {
                         @Override
                         public void run() {
@@ -606,10 +607,10 @@ public class MainActivity extends FullscreenActivity implements NavigationView.O
                                 success.run();
                         }
                     });
-                } catch (Storage.DownloadInterrupted e) {
+                } catch (FileTypeDetector.DownloadInterrupted e) {
                     Log.d(TAG, "interrupted", e);
                 } catch (Exception e) {
-                    Post(e);
+                    ErrorDialog.Post(MainActivity.this, e);
                 } finally {
                     runOnUiThread(new Runnable() {
                         @Override
@@ -650,7 +651,7 @@ public class MainActivity extends FullscreenActivity implements NavigationView.O
                         } catch (Exception e) {
                             Log.d(TAG, "unable to merge info", e);
                         }
-                        storage.delete(u);
+                        Storage.delete(MainActivity.this, u);
                     }
                     book.info.position = selected.get(0);
                     storage.save(book);
@@ -664,7 +665,7 @@ public class MainActivity extends FullscreenActivity implements NavigationView.O
             View v = inflater.inflate(R.layout.recent, null);
 
             final FBReaderView r = (FBReaderView) v.findViewById(R.id.recent_fbview);
-            //r.config.setValue(r.app.ViewOptions.ScrollbarType, 0);
+            // r.config.setValue(r.app.ViewOptions.ScrollbarType, 0);
             r.config.setValue(r.app.MiscOptions.WordTappingAction, MiscOptions.WordTappingActionEnum.doNothing);
             r.config.setValue(r.app.ImageOptions.TapAction, ImageOptions.TapActionEnum.doNothing);
 
@@ -732,7 +733,6 @@ public class MainActivity extends FullscreenActivity implements NavigationView.O
             builder.setNegativeButton(android.R.string.cancel, new DialogInterface.OnClickListener() {
                 @Override
                 public void onClick(DialogInterface dialog, int which) {
-                    ;
                 }
             });
             builder.setPositiveButton(android.R.string.ok, new DialogInterface.OnClickListener() {
@@ -764,6 +764,16 @@ public class MainActivity extends FullscreenActivity implements NavigationView.O
         }
     }
 
+    @SuppressLint("RestrictedApi")
+    public Fragment getCurrentFragment() {
+        FragmentManager fm = getSupportFragmentManager();
+        for (Fragment f : fm.getFragments()) {
+            if (f != null && f.isVisible())
+                return f;
+        }
+        return null;
+    }
+
     public void openBook(Uri uri) {
         popBackStack(ReaderFragment.TAG, FragmentManager.POP_BACK_STACK_INCLUSIVE);
         addFragment(ReaderFragment.newInstance(uri), ReaderFragment.TAG).commit();
@@ -775,8 +785,10 @@ public class MainActivity extends FullscreenActivity implements NavigationView.O
     }
 
     public void openLibrary() {
+        FragmentManager fm = getSupportFragmentManager();
         popBackStack(null, FragmentManager.POP_BACK_STACK_INCLUSIVE);
         openFragment(libraryFragment, LibraryFragment.TAG).commit();
+        onResume(); // update theme if changed
     }
 
     public void openLibrary(BooksCatalog ct) {
@@ -828,8 +840,7 @@ public class MainActivity extends FullscreenActivity implements NavigationView.O
 
     public FragmentTransaction openFragment(Fragment f, String tag) {
         FragmentManager fm = getSupportFragmentManager();
-        FragmentTransaction t = fm.beginTransaction().replace(R.id.main_content, f, tag);
-        return t;
+        return fm.beginTransaction().replace(R.id.main_content, f, tag);
     }
 
     @Override
@@ -907,5 +918,25 @@ public class MainActivity extends FullscreenActivity implements NavigationView.O
         isRunning = true;
         RotatePreferenceCompat.onResume(this, BookApplication.PREFERENCE_ROTATE);
         CacheImagesAdapter.cacheClear(this);
+    }
+
+    @Override
+    public void restartActivity() {
+        Fragment f = getCurrentFragment();
+        if (f instanceof ReaderFragment) {
+            ((ReaderFragment) f).updateTheme();
+            invalidateOptionsMenu();
+        } else if (f instanceof NetworkLibraryFragment) {
+            restartActivity(((NetworkLibraryFragment) f).getUri());
+        } else if (f instanceof LibraryFragment) {
+            super.restartActivity();
+        }
+    }
+
+    public void restartActivity(String url) {
+        Uri uri = Uri.parse(url);
+        finish();
+        startActivity(new Intent(this, getClass()).setAction(VIEW_CATALOG).putExtra(Intent.EXTRA_STREAM, uri));
+        overridePendingTransition(android.R.anim.fade_in, android.R.anim.fade_out);
     }
 }

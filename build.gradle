@@ -1,7 +1,4 @@
-// Top-level build file where you can add configuration options common to all sub-projects/modules.
-
 buildscript {
-    
     repositories {
         mavenLocal()
         google()
@@ -9,6 +6,7 @@ buildscript {
     }
     dependencies {
         classpath 'com.android.tools.build:gradle:3.2.1'
+        classpath 'com.github.axet:gradle-android-dx:0.0.2'
     }
 }
 
@@ -18,10 +16,6 @@ allprojects {
         google()
         jcenter()
     }
-}
-
-task wrapper(type: Wrapper) {
-    gradleVersion = '4.6'
 }
 
 task clean(type: Delete) {

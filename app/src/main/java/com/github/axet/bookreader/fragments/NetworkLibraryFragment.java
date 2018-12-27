@@ -1,6 +1,7 @@
 package com.github.axet.bookreader.fragments;
 
 import android.content.Context;
+import android.content.Intent;
 import android.net.Uri;
 import android.os.Build;
 import android.os.Bundle;
@@ -8,6 +9,8 @@ import android.os.Handler;
 import android.support.annotation.Nullable;
 import android.support.v4.app.ActivityCompat;
 import android.support.v4.app.Fragment;
+import android.support.v7.app.AlertDialog;
+import android.support.v7.widget.PopupMenu;
 import android.view.Gravity;
 import android.view.LayoutInflater;
 import android.view.Menu;
@@ -24,6 +27,7 @@ import android.widget.TextView;
 import com.github.axet.androidlibrary.crypto.MD5;
 import com.github.axet.androidlibrary.net.HttpClient;
 import com.github.axet.androidlibrary.widgets.AboutPreferenceCompat;
+import com.github.axet.androidlibrary.widgets.ErrorDialog;
 import com.github.axet.androidlibrary.widgets.SearchView;
 import com.github.axet.androidlibrary.widgets.WebViewCustom;
 import com.github.axet.bookreader.R;
@@ -34,7 +38,6 @@ import com.github.axet.bookreader.app.Storage;
 import com.github.axet.bookreader.widgets.BookDialog;
 import com.github.axet.bookreader.widgets.BrowserDialogFragment;
 
-import org.apache.commons.io.IOUtils;
 import org.geometerplus.android.util.UIUtil;
 import org.geometerplus.fbreader.network.INetworkLink;
 import org.geometerplus.fbreader.network.NetworkBookItem;
@@ -59,15 +62,16 @@ import org.geometerplus.fbreader.tree.FBTree;
 import org.geometerplus.zlibrary.core.image.ZLImage;
 import org.geometerplus.zlibrary.core.network.ZLNetworkContext;
 import org.geometerplus.zlibrary.core.network.ZLNetworkException;
+import org.geometerplus.zlibrary.core.network.ZLNetworkManager;
 import org.geometerplus.zlibrary.core.network.ZLNetworkRequest;
 import org.geometerplus.zlibrary.core.util.MimeType;
 import org.geometerplus.zlibrary.core.util.ZLNetworkUtil;
 
 import java.io.BufferedInputStream;
 import java.io.InputStream;
-import java.net.HttpURLConnection;
-import java.nio.charset.Charset;
 import java.util.ArrayList;
+import java.util.Collections;
+import java.util.Comparator;
 import java.util.List;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
@@ -77,6 +81,10 @@ import cz.msebera.android.httpclient.impl.client.HttpClientBuilder;
 
 public class NetworkLibraryFragment extends Fragment implements MainActivity.SearchListener {
     public static final String TAG = NetworkLibraryFragment.class.getSimpleName();
+
+    public static final String CONTENTTYPE_EPUB = "application/epub+zip";
+    public static final String CONTENTTYPE_MOBI = "application/x-mobipocket-ebook";
+    public static final String CONTENTTYPE_PDF = "application/pdf";
 
     LibraryFragment.FragmentHolder holder;
     NetworkLibraryAdapter books;
@@ -91,6 +99,7 @@ public class NetworkLibraryFragment extends Fragment implements MainActivity.Sea
     NetworkItemsLoader def;
     ArrayList<Pattern> ignore;
     String useragent;
+    ArrayList<NetworkItemsLoader> toolbarItems = new ArrayList<>();
     Handler handler = new Handler();
     Runnable invalidateOptionsMenu = new Runnable() {
         @Override
@@ -99,7 +108,46 @@ public class NetworkLibraryFragment extends Fragment implements MainActivity.Sea
         }
     };
 
-    ArrayList<NetworkItemsLoader> toolbarItems = new ArrayList<>();
+    public static String formatMime(String mime) {
+        switch (mime) {
+            case Storage.CONTENTTYPE_FB2:
+                return "fb2";
+            case CONTENTTYPE_EPUB:
+                return "epub";
+            case CONTENTTYPE_MOBI:
+                return "mobi";
+            case CONTENTTYPE_PDF:
+                return "pdf";
+        }
+        return mime;
+    }
+
+    public static class MobileFirst implements Comparator<UrlInfo> {
+        public static String[] order = new String[]{"epub", "fb2", "x-fictionbook", "mobi", "x-mobipocket-ebook"};
+
+        public MobileFirst() {
+        }
+
+        Integer indexOf(MimeType m) {
+            for (int i = 0; i < order.length; i++) {
+                if (m.Name.contains(order[i]))
+                    return i;
+            }
+            return Integer.MAX_VALUE;
+        }
+
+        public int compare(MimeType m1, MimeType m2) {
+            return indexOf(m1).compareTo(indexOf(m2));
+        }
+
+        @Override
+        public int compare(UrlInfo o1, UrlInfo o2) {
+            int r = compare(o1.Mime, o2.Mime);
+            if (r != 0)
+                return r;
+            return 0;
+        }
+    }
 
     public class SearchCatalog {
         NetworkOperationData data;
@@ -160,9 +208,9 @@ public class NetworkLibraryFragment extends Fragment implements MainActivity.Sea
     }
 
     public class NetworkLibraryAdapter extends LibraryFragment.BooksAdapter {
+        String filter;
         List<FBTree> all = new ArrayList<>();
         List<FBTree> list = new ArrayList<>();
-        String filter;
 
         public NetworkLibraryAdapter() {
             super(NetworkLibraryFragment.this.getContext(), NetworkLibraryFragment.this.holder);
@@ -246,10 +294,8 @@ public class NetworkLibraryFragment extends Fragment implements MainActivity.Sea
         public Uri getCover(int position) {
             FBTree b = list.get(position);
             ZLImage cover = b.getCover();
-            if (cover != null && cover instanceof NetworkImage) {
-                Uri u = Uri.parse(((NetworkImage) cover).Url);
-                return u;
-            }
+            if (cover instanceof NetworkImage)
+                return Uri.parse(((NetworkImage) cover).Url);
             return null;
         }
 
@@ -261,11 +307,10 @@ public class NetworkLibraryFragment extends Fragment implements MainActivity.Sea
 
             View convertView = h.itemView;
 
-            if (cover != null) {
+            if (cover != null)
                 downloadTask(cover, convertView);
-            } else {
+            else
                 downloadTaskUpdate(null, null, convertView);
-            }
         }
     }
 
@@ -295,7 +340,7 @@ public class NetworkLibraryFragment extends Fragment implements MainActivity.Sea
         lib = NetworkLibrary.Instance(new Storage.Info(getContext()));
         books = new NetworkLibraryAdapter();
         n = (NetworkBooksCatalog) catalogs.find(u);
-        nc = new BooksCatalogs.NetworkContext(getContext());
+        nc = new BooksCatalogs.NetworkContext(getActivity());
 
         setHasOptionsMenu(true);
 
@@ -343,6 +388,10 @@ public class NetworkLibraryFragment extends Fragment implements MainActivity.Sea
         }
     }
 
+    public String getUri() {
+        return getArguments().getString("url");
+    }
+
     public NetworkItemsLoader getCatalogItem(String url, String name) {
         UrlInfoCollection<UrlInfoWithDate> ii = new UrlInfoCollection<>();
         ii.addInfo(new UrlInfoWithDate(UrlInfo.Type.Catalog, url, MimeType.APP_ATOM_XML));
@@ -381,7 +430,7 @@ public class NetworkLibraryFragment extends Fragment implements MainActivity.Sea
                         }
                     });
                 } catch (Exception e) {
-                    main.Post(e);
+                    ErrorDialog.Post(main, e);
                 }
             }
         }, getContext());
@@ -442,7 +491,6 @@ public class NetworkLibraryFragment extends Fragment implements MainActivity.Sea
             lp.gravity = Gravity.CENTER;
             holder.searchtoolbar.addView(t, lp);
         }
-
         if (holder.searchtoolbar.getChildCount() == 0)
             holder.toolbar.setVisibility(View.GONE);
         else
@@ -469,7 +517,7 @@ public class NetworkLibraryFragment extends Fragment implements MainActivity.Sea
                         }
                     });
                 } catch (Exception e) {
-                    main.Post(e);
+                    ErrorDialog.Post(main, e);
                 }
             }
         }, getContext());
@@ -527,7 +575,7 @@ public class NetworkLibraryFragment extends Fragment implements MainActivity.Sea
                                 }
                             });
                         } catch (Exception e) {
-                            main.Post(e);
+                            ErrorDialog.Post(main, e);
                         }
                     }
                 }, getContext());
@@ -560,9 +608,8 @@ public class NetworkLibraryFragment extends Fragment implements MainActivity.Sea
                                         protected void load() throws ZLNetworkException {
                                         }
                                     };
-                                    if (l.Tree.subtrees().isEmpty()) {
+                                    if (l.Tree.subtrees().isEmpty())
                                         new CatalogExpander(l.NetworkContext, l.Tree, false, false).run();
-                                    }
                                     handler.post(new Runnable() {
                                         @Override
                                         public void run() {
@@ -572,11 +619,11 @@ public class NetworkLibraryFragment extends Fragment implements MainActivity.Sea
                                                     return;
                                                 }
                                             }
-                                            main.Error("Empty Url");
+                                            ErrorDialog.Error(main, "Empty Url");
                                         }
                                     });
                                 } catch (Exception e) {
-                                    main.Post(e);
+                                    ErrorDialog.Post(main, e);
                                 }
                             }
                         }, getContext());
@@ -585,8 +632,35 @@ public class NetworkLibraryFragment extends Fragment implements MainActivity.Sea
                         loadBook((NetworkBookTree) b);
                     }
                 } catch (RuntimeException e) {
-                    main.Error(e);
+                    ErrorDialog.Error(main, e);
                 }
+            }
+        });
+        holder.setOnItemLongClickListener(new AdapterView.OnItemLongClickListener() {
+            @Override
+            public boolean onItemLongClick(AdapterView<?> parent, View view, int position, long id) {
+                final FBTree b = books.getItem(position);
+                if (b instanceof NetworkBookTree) {
+                    List<UrlInfo> ll = ((NetworkBookTree) b).Book.getAllInfos(UrlInfo.Type.Book);
+                    if (ll.size() > 1) {
+                        PopupMenu w = new PopupMenu(getContext(), view);
+                        Menu menu = w.getMenu();
+                        for (UrlInfo u : ll) {
+                            MenuItem add = menu.add(getString(R.string.book_open) + " '" + formatMime(u.Mime.Name) + "'");
+                            add.setIntent(new Intent(Intent.ACTION_VIEW).setDataAndType(Uri.parse(u.Url), u.Mime.Name));
+                        }
+                        w.setOnMenuItemClickListener(new PopupMenu.OnMenuItemClickListener() {
+                            @Override
+                            public boolean onMenuItemClick(MenuItem item) {
+                                Intent intent = item.getIntent();
+                                loadBook(new UrlInfo(UrlInfo.Type.Book, intent.getData().toString(), MimeType.get(intent.getType())));
+                                return true;
+                            }
+                        });
+                        w.show();
+                    }
+                }
+                return true;
             }
         });
         return v;
@@ -596,6 +670,7 @@ public class NetworkLibraryFragment extends Fragment implements MainActivity.Sea
         List<UrlInfo> ll = n.Book.getAllInfos(t);
         if (ll.size() == 0)
             return null;
+        Collections.sort(ll, new MobileFirst());
         return ll.get(0);
     }
 
@@ -631,7 +706,7 @@ public class NetworkLibraryFragment extends Fragment implements MainActivity.Sea
                                 }
                             });
                         } catch (Exception e) {
-                            main.Post(e);
+                            ErrorDialog.Post(main, e);
                         }
                     }
                 }, getContext());
@@ -639,83 +714,85 @@ public class NetworkLibraryFragment extends Fragment implements MainActivity.Sea
             }
             openBrowser(url);
         } else {
-            final Uri uri = Uri.parse(u.Url);
-            final String mimetype = u.Mime.toString(); // gutenberg fake mimetypes when it want to open browser
-            UIUtil.wait("loadingBook", new Runnable() {
-                @Override
-                public void run() {
-                    try {
-                        String contentDisposition = null;
-                        InputStream is;
-                        if (Build.VERSION.SDK_INT < 11) {
-                            HttpURLConnection conn = HttpClient.openConnection(uri, useragent);
-                            is = conn.getInputStream();
-                            String wm = conn.getContentType();
-                            if (wm != null && mimetype != null && !wm.equals(mimetype) && wm.startsWith("text")) {
-                                final String html = IOUtils.toString(is, Charset.defaultCharset());
-                                handler.post(new Runnable() {
-                                    @Override
-                                    public void run() {
-                                        BrowserDialogFragment b = BrowserDialogFragment.createHtml(uri.toString(), html);
-                                        b.show(getFragmentManager(), "");
-                                    }
-                                });
-                                return;
-                            }
-                        } else {
-                            HttpClient client = new HttpClient() {
-                                @Override
-                                protected CloseableHttpClient build(HttpClientBuilder builder) {
-                                    if (useragent != null)
-                                        builder.setUserAgent(useragent);
-                                    return super.build(builder);
-                                }
-                            };
-                            final HttpClient.DownloadResponse w = client.getResponse(null, uri.toString());
-                            if (w.getError() != null)
-                                throw new RuntimeException(w.getError() + ": " + uri);
-                            if (w.contentDisposition != null) {
-                                Pattern cp = Pattern.compile("filename=[\"]*([^\"]*)[\"]*");
-                                Matcher cm = cp.matcher(w.contentDisposition);
-                                if (cm.find())
-                                    contentDisposition = cm.group(1);
-                            }
-                            String wm = w.getMimeType();
-                            if (w.getResponse().getEntity().getContentType() != null && mimetype != null && !wm.equals(mimetype) && wm.startsWith("text")) {
-                                handler.post(new Runnable() {
-                                    @Override
-                                    public void run() {
-                                        BrowserDialogFragment b = BrowserDialogFragment.createHtml(uri.toString(), w.getHtml());
-                                        b.show(getFragmentManager(), "");
-                                    }
-                                });
-                                return;
-                            }
-                            is = new BufferedInputStream(w.getInputStream());
+            loadBook(u);
+        }
+    }
+
+    void loadBook(UrlInfo u) {
+        final MainActivity main = (MainActivity) getActivity();
+        final Uri uri = Uri.parse(u.Url);
+        final String mimetype = u.Mime.toString(); // gutenberg fake mimetypes when it want to open browser
+        final MainActivity.ProgressDialog builder = new MainActivity.ProgressDialog(getContext());
+        final AlertDialog d = builder.create();
+        d.show();
+        Thread t = new Thread("loading book") {
+            @Override
+            public void run() {
+                try {
+                    String contentDisposition = null;
+                    long total;
+                    InputStream is;
+                    HttpClient client = new HttpClient() {
+                        @Override
+                        protected CloseableHttpClient build(HttpClientBuilder builder) {
+                            if (useragent != null)
+                                builder.setUserAgent(useragent);
+                            return super.build(builder);
                         }
-                        final Storage.Book book = storage.load(is, uri); // we have to download content first, then determine it type. not using load(uri)
-                        storage.load(book);
-                        if (book.info.title == null || book.info.title.isEmpty() || book.info.title.equals(book.md5)) {
-                            if (contentDisposition != null && !contentDisposition.isEmpty())
-                                book.info.title = contentDisposition;
-                            else
-                                book.info.title = Storage.getNameNoExt(uri.getLastPathSegment());
-                        }
-                        Uri r = storage.recentUri(book);
-                        if (!storage.exists(r))
-                            storage.save(book);
+                    };
+                    final HttpClient.DownloadResponse w = client.getResponse(null, uri.toString());
+                    if (w.getError() != null)
+                        throw new RuntimeException(w.getError() + ": " + uri);
+                    if (w.contentDisposition != null) {
+                        Pattern cp = Pattern.compile("filename=[\"]*([^\"]*)[\"]*");
+                        Matcher cm = cp.matcher(w.contentDisposition);
+                        if (cm.find())
+                            contentDisposition = cm.group(1);
+                    }
+                    String wm = w.mimetype;
+                    if (w.getResponse().getEntity().getContentType() != null && mimetype != null && !wm.equals(mimetype) && wm.startsWith("text")) {
                         handler.post(new Runnable() {
                             @Override
                             public void run() {
-                                main.loadBook(book);
+                                BrowserDialogFragment b = BrowserDialogFragment.createHtml(uri.toString(), w.getHtml());
+                                b.show(getFragmentManager(), "");
                             }
                         });
-                    } catch (Exception e) {
-                        main.Post(e);
+                        return;
                     }
+                    is = new BufferedInputStream(w.getInputStream());
+                    total = w.contentLength;
+                    Storage.ProgresInputstream pis = new Storage.ProgresInputstream(is, total, builder.progress);
+                    final Storage.Book book = storage.load(pis, uri); // not using Storage.load(uri). we have to download content first, then determine it type.
+                    storage.load(book);
+                    if (book.info.title == null || book.info.title.isEmpty() || book.info.title.equals(book.md5)) {
+                        if (contentDisposition != null && !contentDisposition.isEmpty())
+                            book.info.title = contentDisposition;
+                        else
+                            book.info.title = Storage.getNameNoExt(uri.getLastPathSegment());
+                    }
+                    Uri r = storage.recentUri(book);
+                    if (!Storage.exists(getContext(), r))
+                        storage.save(book);
+                    handler.post(new Runnable() {
+                        @Override
+                        public void run() {
+                            main.loadBook(book);
+                        }
+                    });
+                } catch (Exception e) {
+                    ErrorDialog.Post(main, e);
+                } finally {
+                    handler.post(new Runnable() {
+                        @Override
+                        public void run() {
+                            d.cancel();
+                        }
+                    });
                 }
-            }, getContext());
-        }
+            }
+        };
+        t.start();
     }
 
     @Override
@@ -760,7 +837,7 @@ public class NetworkLibraryFragment extends Fragment implements MainActivity.Sea
                             }
                         });
                     } catch (Exception e) {
-                        main.Post(e);
+                        ErrorDialog.Post(main, e);
                     }
                 }
             }, getContext());

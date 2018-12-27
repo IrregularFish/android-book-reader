@@ -2,11 +2,11 @@ package com.github.axet.bookreader.app;
 
 import android.graphics.Bitmap;
 import android.graphics.Canvas;
-import android.graphics.Paint;
 import android.graphics.Rect;
 import android.util.SparseArray;
 
 import com.github.axet.androidlibrary.app.Natives;
+import com.github.axet.androidlibrary.widgets.CacheImagesAdapter;
 import com.github.axet.bookreader.widgets.FBReaderView;
 import com.github.axet.bookreader.widgets.PluginPage;
 import com.github.axet.bookreader.widgets.PluginRect;
@@ -672,7 +672,6 @@ public class DjvuPlugin extends BuiltinFormatPlugin {
 
     public static class DjvuView extends PluginView {
         public DjvuLibre doc;
-        Paint paint = new Paint();
         FileInputStream is;
 
         public DjvuView(ZLFile f) {
@@ -710,10 +709,8 @@ public class DjvuPlugin extends BuiltinFormatPlugin {
             DjvuPage r = new DjvuPage((DjvuPage) current, index, w, h);
             if (index == ZLViewEnums.PageIndex.current)
                 current.updatePage(r);
-
             r.scale(w, h);
             RenderRect render = r.renderRect();
-
             Bitmap bm = Bitmap.createBitmap(r.pageBox.w, r.pageBox.h, c);
             bm.eraseColor(FBReaderView.PAGE_PAPER_COLOR);
             doc.renderPage(bm, r.pageNumber, 0, 0, r.pageBox.w, r.pageBox.h, render.x, render.y, render.w, render.h);
@@ -866,7 +863,7 @@ public class DjvuPlugin extends BuiltinFormatPlugin {
     @Override
     public ZLImage readCover(ZLFile file) {
         DjvuView view = new DjvuView(file);
-        view.current.scale(Storage.COVER_SIZE, Storage.COVER_SIZE); // reduce render memory footprint
+        view.current.scale(CacheImagesAdapter.COVER_SIZE, CacheImagesAdapter.COVER_SIZE); // reduce render memory footprint
         Bitmap bm = Bitmap.createBitmap(view.current.pageBox.w, view.current.pageBox.h, Bitmap.Config.RGB_565);
         Canvas canvas = new Canvas(bm);
         view.drawWallpaper(canvas);

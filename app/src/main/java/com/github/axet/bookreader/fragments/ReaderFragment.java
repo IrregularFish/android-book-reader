@@ -1,5 +1,6 @@
 package com.github.axet.bookreader.fragments;
 
+import android.app.Activity;
 import android.content.BroadcastReceiver;
 import android.content.Context;
 import android.content.DialogInterface;
@@ -19,6 +20,7 @@ import android.preference.PreferenceManager;
 import android.support.v4.app.ActivityCompat;
 import android.support.v4.app.Fragment;
 import android.support.v4.view.MenuItemCompat;
+import android.support.v4.view.ViewCompat;
 import android.support.v7.app.AlertDialog;
 import android.support.v7.widget.LinearLayoutManager;
 import android.support.v7.widget.RecyclerView;
@@ -39,6 +41,7 @@ import android.widget.PopupWindow;
 import android.widget.SeekBar;
 import android.widget.TextView;
 
+import com.github.axet.androidlibrary.widgets.ErrorDialog;
 import com.github.axet.androidlibrary.widgets.PopupWindowCompat;
 import com.github.axet.androidlibrary.widgets.ScreenlockPreference;
 import com.github.axet.androidlibrary.widgets.ThemeUtils;
@@ -81,6 +84,7 @@ public class ReaderFragment extends Fragment implements MainActivity.SearchListe
     public static final int REFLOW_START = 3;
     public static final int REFLOW_END = 15;
 
+    Handler handler = new Handler();
     Storage storage;
     Storage.Book book;
     Storage.FBook fbook;
@@ -97,7 +101,14 @@ public class ReaderFragment extends Fragment implements MainActivity.SearchListe
     View fontsizepopup_plus;
     boolean showRTL;
     PopupWindow popupWindow;
-    Handler handler = new Handler();
+    MenuItem searchMenu;
+    BroadcastReceiver battery;
+    Runnable invalidateOptionsMenu = new Runnable() {
+        @Override
+        public void run() {
+            ActivityCompat.invalidateOptionsMenu(getActivity());
+        }
+    };
     Runnable time = new Runnable() {
         @Override
         public void run() {
@@ -112,14 +123,24 @@ public class ReaderFragment extends Fragment implements MainActivity.SearchListe
             savePosition();
         }
     };
-    MenuItem searchMenu;
-    BroadcastReceiver battery;
-    Runnable invalidateOptionsMenu = new Runnable() {
-        @Override
-        public void run() {
-            ActivityCompat.invalidateOptionsMenu(getActivity());
+
+    public static View getOverflowMenuButton(Activity a) {
+        return getOverflowMenuButton((ViewGroup) a.findViewById(R.id.toolbar));
+    }
+
+    public static View getOverflowMenuButton(ViewGroup p) {
+        for (int i = 0; i < p.getChildCount(); i++) {
+            View v = p.getChildAt(i);
+            if (v.getClass().getCanonicalName().contains("OverflowMenuButton"))
+                return v;
+            if (v instanceof ViewGroup) {
+                v = getOverflowMenuButton((ViewGroup) v);
+                if (v != null)
+                    return v;
+            }
         }
-    };
+        return null;
+    }
 
     public static class FontView {
         public String name;
@@ -560,7 +581,7 @@ public class ReaderFragment extends Fragment implements MainActivity.SearchListe
             if (pos != null)
                 view.gotoPosition(pos);
         } catch (RuntimeException e) {
-            main.Error(e);
+            ErrorDialog.Error(main, e);
             main.openLibrary();
         }
 
@@ -724,6 +745,8 @@ public class ReaderFragment extends Fragment implements MainActivity.SearchListe
         battery.onReceive(getContext(), getContext().registerReceiver(battery, new IntentFilter(Intent.ACTION_BATTERY_CHANGED)));
 
         time.run();
+
+        updateTheme(); // MainActivity.restartActivity() not called when double change while ReaderFragment active
     }
 
     @Override
@@ -786,7 +809,7 @@ public class ReaderFragment extends Fragment implements MainActivity.SearchListe
         Storage.RecentInfo save = new Storage.RecentInfo(view.book.info);
         save.position = view.getPosition();
         Uri u = storage.recentUri(book);
-        if (storage.exists(u)) { // file can be changed during sync, check for conflicts
+        if (Storage.exists(getContext(), u)) { // file can be changed during sync, check for conflicts
             try {
                 Storage.RecentInfo info = new Storage.RecentInfo(getContext(), u);
                 if (info.position != null && save.position.samePositionAs(info.position)) {
@@ -843,6 +866,22 @@ public class ReaderFragment extends Fragment implements MainActivity.SearchListe
                 public void selected(Storage.Bookmark b) {
                     view.gotoPosition(new FBReaderView.ZLTextIndexPosition(b.start, b.end));
                 }
+
+                @Override
+                public void save(Storage.Bookmark bm) {
+                    view.bookmarksUpdate();
+                    savePosition();
+                }
+
+                @Override
+                public void delete(Storage.Bookmark bm) {
+                    int i = book.info.bookmarks.indexOf(bm);
+                    book.info.bookmarks.remove(i);
+                    i = view.book.info.bookmarks.indexOf(bm);
+                    view.book.info.bookmarks.remove(i);
+                    view.bookmarksUpdate();
+                    savePosition();
+                }
             };
             dialog.load(view.book.info.bookmarks);
             dialog.show();
@@ -866,8 +905,11 @@ public class ReaderFragment extends Fragment implements MainActivity.SearchListe
             fonts.select(view.app.ViewOptions.getTextStyleCollection().getBaseStyle().FontFamilyOption.getValue());
             fontsList.scrollToPosition(fonts.selected);
             updateFontsize();
-            PopupWindowCompat.showAsTooltip(popupWindow, MenuItemCompat.getActionView(item), Gravity.BOTTOM,
-                    ThemeUtils.getThemeColor(getContext(), R.attr.colorButtonNormal),
+            View v = MenuItemCompat.getActionView(item);
+            if (v == null || !ViewCompat.isAttachedToWindow(v))
+                v = getOverflowMenuButton(getActivity());
+            PopupWindowCompat.showAsTooltip(popupWindow, v, Gravity.BOTTOM,
+                    ThemeUtils.getThemeColor(getContext(), R.attr.colorButtonNormal), // v has overflow ThemedContext
                     ThemeUtils.dp2px(getContext(), 300));
         }
         if (id == R.id.action_rtl) {
@@ -885,7 +927,12 @@ public class ReaderFragment extends Fragment implements MainActivity.SearchListe
             view.reset();
             updateToolbar();
         }
+
         return super.onOptionsItemSelected(item);
+    }
+
+    public void updateTheme() {
+        view.updateTheme();
     }
 
     @Override
@@ -911,6 +958,7 @@ public class ReaderFragment extends Fragment implements MainActivity.SearchListe
         final MenuItem rtl = menu.findItem(R.id.action_rtl);
         MenuItem grid = menu.findItem(R.id.action_grid);
         MenuItem mode = menu.findItem(R.id.action_mode);
+        MenuItem theme = menu.findItem(R.id.action_theme);
 
         boolean search;
 
@@ -969,6 +1017,9 @@ public class ReaderFragment extends Fragment implements MainActivity.SearchListe
         rtl.setTitle(view.app.BookTextView.rtlMode ? "RTL" : "LTR");
         ((ToolbarButtonView) MenuItemCompat.getActionView(rtl)).text.setText(view.app.BookTextView.rtlMode ? "RTL" : "LTR");
         bookmarksMenu.setVisible(view.book.info.bookmarks != null && view.book.info.bookmarks.size() > 0);
+
+        if (view.pluginview instanceof ComicsPlugin.ComicsView)
+            theme.setVisible(false);
     }
 
     void showTOC() {

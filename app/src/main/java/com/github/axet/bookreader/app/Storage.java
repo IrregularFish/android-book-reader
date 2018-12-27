@@ -10,24 +10,20 @@ import android.graphics.BitmapFactory;
 import android.graphics.Canvas;
 import android.net.Uri;
 import android.os.Build;
-import android.os.Handler;
 import android.os.ParcelFileDescriptor;
 import android.preference.PreferenceManager;
 import android.provider.DocumentsContract;
 import android.provider.MediaStore;
-import android.support.v7.app.AlertDialog;
 import android.util.DisplayMetrics;
 import android.util.Log;
 import android.view.LayoutInflater;
 import android.view.View;
-import android.widget.ProgressBar;
 import android.widget.TextView;
-import android.widget.Toast;
 
 import com.github.axet.androidlibrary.app.AlarmManager;
+import com.github.axet.androidlibrary.app.FileTypeDetector;
 import com.github.axet.androidlibrary.net.HttpClient;
 import com.github.axet.androidlibrary.widgets.CacheImagesAdapter;
-import com.github.axet.androidlibrary.widgets.ThemeUtils;
 import com.github.axet.androidlibrary.widgets.WebViewCustom;
 import com.github.axet.bookreader.R;
 import com.github.axet.bookreader.widgets.FBReaderView;
@@ -52,15 +48,9 @@ import org.geometerplus.zlibrary.ui.android.image.ZLBitmapImage;
 import org.json.JSONArray;
 import org.json.JSONException;
 import org.json.JSONObject;
-import org.xml.sax.Attributes;
-import org.xml.sax.InputSource;
-import org.xml.sax.SAXException;
-import org.xml.sax.XMLReader;
-import org.xml.sax.helpers.DefaultHandler;
 
 import java.io.BufferedInputStream;
 import java.io.BufferedOutputStream;
-import java.io.ByteArrayOutputStream;
 import java.io.File;
 import java.io.FileDescriptor;
 import java.io.FileInputStream;
@@ -72,10 +62,7 @@ import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
 import java.io.Writer;
-import java.net.HttpURLConnection;
-import java.nio.channels.FileChannel;
 import java.nio.charset.Charset;
-import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
 import java.util.ArrayList;
 import java.util.HashMap;
@@ -84,62 +71,25 @@ import java.util.Map;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 import java.util.zip.ZipEntry;
-import java.util.zip.ZipFile;
-import java.util.zip.ZipInputStream;
 import java.util.zip.ZipOutputStream;
 
-import javax.xml.parsers.SAXParser;
-import javax.xml.parsers.SAXParserFactory;
-
 import de.innosystec.unrar.Archive;
+import de.innosystec.unrar.NativeStorage;
 import de.innosystec.unrar.rarfile.FileHeader;
 
 public class Storage extends com.github.axet.androidlibrary.app.Storage {
     public static String TAG = Storage.class.getCanonicalName();
 
     public static final int MD5_SIZE = 32;
-    public static final int COVER_SIZE = 128;
-    public static final int BUF_SIZE = 1024;
     public static final String JSON_EXT = "json";
     public static final String ZIP_EXT = "zip";
 
-    public static Detector[] supported() {
-        return new Detector[]{new FileFB2(), new FileFB2Zip(), new FileEPUB(), new FileHTML(), new FileHTMLZip(),
-                new FilePDF(), new FileDjvu(), new FileRTF(), new FileRTFZip(), new FileDoc(),
-                new FileMobi(), new FileTxt(), new FileTxtZip(), new FileCbz(), new FileCbr()};
-    }
-
-    public static String detecting(Storage storage, Detector[] dd, InputStream is, OutputStream os, Uri u) throws IOException, NoSuchAlgorithmException {
-        MessageDigest digest = java.security.MessageDigest.getInstance("MD5");
-        FileTypeDetectorXml xml = new FileTypeDetectorXml(dd);
-        FileTypeDetectorZip zip = new FileTypeDetectorZip(dd);
-        FileTypeDetector bin = new FileTypeDetector(dd);
-        ExtDetector ext = new ExtDetector(dd);
-
-        byte[] buf = new byte[BUF_SIZE];
-        int len;
-        while ((len = is.read(buf)) > 0) {
-            if (Thread.currentThread().isInterrupted())
-                throw new DownloadInterrupted();
-            digest.update(buf, 0, len);
-            if (os != null)
-                os.write(buf, 0, len);
-            xml.write(buf, 0, len);
-            zip.write(buf, 0, len);
-            bin.write(buf, 0, len);
-        }
-
-        if (os != null)
-            os.close();
-        bin.close();
-        zip.close();
-        xml.close();
-
-        String s = u.getScheme();
-        if (s.equals(ContentResolver.SCHEME_CONTENT) || s.equals(ContentResolver.SCHEME_FILE)) // ext detection works for local files only
-            ext.detect(storage, u);
-
-        return toHex(digest.digest());
+    public static FileTypeDetector.Detector[] supported() {
+        return new FileTypeDetector.Detector[]{new FileTypeDetector.FileFB2(), new FileTypeDetector.FileFB2Zip(),
+                new FileTypeDetector.FileEPUB(), new FileTypeDetector.FileHTML(), new FileTypeDetector.FileHTMLZip(),
+                new FileTypeDetector.FilePDF(), new FileTypeDetector.FileDjvu(), new FileTypeDetector.FileRTF(),
+                new FileTypeDetector.FileRTFZip(), new FileTypeDetector.FileDoc(), new FileTypeDetector.FileMobi(),
+                new FileTypeDetector.FileTxt(), new FileTypeDetector.FileTxtZip(), new FileCbz(), new FileCbr()};
     }
 
     public static FormatPlugin getPlugin(Storage.Info info, Storage.FBook b) {
@@ -159,9 +109,6 @@ public class Storage extends com.github.axet.androidlibrary.app.Storage {
         } catch (BookReadingException e) {
             throw new RuntimeException(e);
         }
-    }
-
-    public static class DownloadInterrupted extends RuntimeException {
     }
 
     public static class Info implements SystemInfo {
@@ -257,8 +204,8 @@ public class Storage extends com.github.axet.androidlibrary.app.Storage {
         String s = book.url.getScheme();
         if (Build.VERSION.SDK_INT >= 21 && s.equals(ContentResolver.SCHEME_CONTENT)) {
             String id = book.md5 + "." + JSON_EXT;
-            Uri doc = DocumentsContract.buildDocumentUriUsingTree(Storage.getDocumentTreeUri(book.url), DocumentsContract.getTreeDocumentId(book.url));
-            return child(doc, id);
+            Uri doc = Storage.getDocumentParent(context, book.url);
+            return child(context, doc, id);
         } else if (s.equals(ContentResolver.SCHEME_FILE)) {
             return Uri.fromFile(recentFile(book));
         } else {
@@ -336,638 +283,15 @@ public class Storage extends com.github.axet.androidlibrary.app.Storage {
         return a;
     }
 
-    public static class Detector {
-        public boolean done;
-        public boolean detected;
-        public String ext;
-
-        public Detector(String ext) {
-            this.ext = ext;
-        }
-
-        public void clear() {
-            done = false;
-            detected = false;
-        }
-    }
-
-    public static class FileTypeDetector {
-        ArrayList<Handler> list = new ArrayList<>();
-
-        public static class Handler extends Detector {
-            byte[] first;
-            ByteArrayOutputStream os; // no need to close
-
-            public Handler(String ext) {
-                super(ext);
-                clear();
-            }
-
-            public Handler(String ext, String str) {
-                super(ext);
-                first = str.getBytes(Charset.defaultCharset());
-                clear();
-            }
-
-            public Handler(String ext, int[] b) {
-                super(ext);
-                first = new byte[b.length];
-                for (int i = 0; i < b.length; i++)
-                    first[i] = (byte) b[i];
-                clear();
-            }
-
-            public void write(byte[] buf, int off, int len) {
-                if (first != null) {
-                    int left = first.length - os.size();
-                    if (len > left)
-                        len = left;
-                    os.write(buf, off, len);
-                    left = first.length - os.size();
-                    if (left == 0) {
-                        done = true;
-                        detected = equals(os.toByteArray(), first);
-                    }
-                } else {
-                    os.write(buf, off, len);
-                }
-            }
-
-            public boolean equals(byte[] buf1, byte[] buf2) {
-                int len = buf1.length;
-                if (len != buf2.length)
-                    return false;
-                for (int i = 0; i < len; i++) {
-                    if (buf1[i] != buf2[i])
-                        return false;
-                }
-                return true;
-            }
-
-            public byte[] head(byte[] buf, int head) {
-                byte[] b = new byte[head];
-                System.arraycopy(buf, 0, b, 0, head);
-                return b;
-            }
-
-            public byte[] tail(byte[] buf, int tail) {
-                byte[] b = new byte[tail];
-                System.arraycopy(buf, buf.length - tail, b, 0, tail);
-                return b;
-            }
-
-            public void clear() {
-                super.clear();
-                os = new ByteArrayOutputStream();
-            }
-        }
-
-        public FileTypeDetector(Detector[] dd) {
-            for (Detector d : dd) {
-                if (d instanceof Handler) {
-                    Handler h = (Handler) d;
-                    h.clear();
-                    list.add(h);
-                }
-            }
-        }
-
-        public void write(byte[] buf, int off, int len) {
-            for (Handler h : new ArrayList<>(list)) {
-                h.write(buf, off, len);
-                if (h.done)
-                    list.remove(h);
-            }
-        }
-
-        public void close() {
-        }
-
-    }
-
-    public static class ExtDetector extends FileTypeDetector {
-        ArrayList<Handler> list = new ArrayList<>();
-
-        public static class Handler extends FileTypeDetector.Handler {
-            public Handler(String ext) {
-                super(ext);
-                clear();
-            }
-
-            public Handler(String ext, String str) {
-                super(ext, str);
-            }
-
-            public Handler(String ext, int[] b) {
-                super(ext, b);
-            }
-        }
-
-        public ExtDetector(Detector[] dd) {
-            super(dd);
-            for (Detector d : dd) {
-                if (d instanceof Handler) {
-                    Handler h = (Handler) d;
-                    h.clear();
-                    list.add(h);
-                }
-            }
-        }
-
-        public void detect(Storage storage, Uri u) {
-            String name = storage.getName(u);
-            String e = Storage.getExt(name).toLowerCase();
-            for (Handler h : list) {
-                if (h.done && h.detected && e.equals(h.ext)) {
-                    h.detected = true;
-                    h.done = true;
-                } else {
-                    h.detected = false;
-                }
-            }
-        }
-
-        public void close() {
-        }
-
-    }
-
-    public static class FileTypeDetectorZipExtract extends FileTypeDetectorZip {
-        public static class Handler extends FileTypeDetectorZip.Handler {
-            public Handler(String ext) {
-                super(ext);
-            }
-
-            public String extract(File f, File t) {
-                return null;
-            }
-
-            public String extract(ZipInputStream zip, File t) {
-                try {
-                    MessageDigest digest = java.security.MessageDigest.getInstance("MD5");
-                    FileOutputStream os = new FileOutputStream(t);
-
-                    byte[] buf = new byte[BUF_SIZE];
-                    int len;
-                    while ((len = zip.read(buf)) > 0) {
-                        digest.update(buf, 0, len);
-                        os.write(buf, 0, len);
-                    }
-
-                    os.close();
-                    return Storage.toHex(digest.digest());
-                } catch (RuntimeException r) {
-                    throw r;
-                } catch (Exception r) {
-                    throw new RuntimeException(r);
-                }
-            }
-
-            public String extract(ZipEntry e, File f, File t) {
-                try {
-                    MessageDigest digest = java.security.MessageDigest.getInstance("MD5");
-                    ZipFile zip = new ZipFile(f);
-                    InputStream is = zip.getInputStream(e);
-                    FileOutputStream os = new FileOutputStream(t);
-
-                    byte[] buf = new byte[BUF_SIZE];
-                    int len;
-                    while ((len = is.read(buf)) > 0) {
-                        digest.update(buf, 0, len);
-                        os.write(buf, 0, len);
-                    }
-
-                    os.close();
-                    is.close();
-                    return Storage.toHex(digest.digest());
-                } catch (RuntimeException r) {
-                    throw r;
-                } catch (Exception r) {
-                    throw new RuntimeException(r);
-                }
-            }
-        }
-
-        public FileTypeDetectorZipExtract(Detector[] dd) {
-            super(dd);
-        }
-    }
-
-    public static class FileTypeDetectorIO {
-        ParcelFileDescriptor.AutoCloseInputStream is;
-        ParcelFileDescriptor.AutoCloseOutputStream os;
-
-        public static class Handler extends Detector {
-            public Handler(String ext) {
-                super(ext);
-            }
-        }
-
-        public FileTypeDetectorIO() {
-            try {
-                ParcelFileDescriptor[] pp = ParcelFileDescriptor.createPipe();
-                is = new ParcelFileDescriptor.AutoCloseInputStream(pp[0]);
-                os = new ParcelFileDescriptor.AutoCloseOutputStream(pp[1]);
-            } catch (IOException e) {
-                throw new RuntimeException(e);
-            }
-        }
-
-        public void write(byte[] buf, int off, int len) {
-            try {
-                os.write(buf, off, len);
-            } catch (IOException e) { // ignore expcetions, stream can be closed by reading thread
-            }
-        }
-
-        public void close() {
-            try {
-                os.close();
-            } catch (IOException e) {
-            }
-        }
-    }
-
-    public static class FileTypeDetectorZip extends FileTypeDetectorIO {
-        ArrayList<Handler> list = new ArrayList<>();
-        Thread thread;
-
-        public static class Handler extends FileTypeDetectorIO.Handler {
-            public Handler(String ext) {
-                super(ext);
-            }
-
-            public void nextEntry(ZipEntry entry) {
-            }
-        }
-
-        public FileTypeDetectorZip(Detector[] dd) {
-            super();
-
-            for (Detector d : dd) {
-                if (d instanceof Handler) {
-                    Handler h = (Handler) d;
-                    h.clear();
-                    list.add(h);
-                }
-            }
-
-            thread = new Thread("zip detector") {
-                @Override
-                public void run() {
-                    ZipInputStream zip = null;
-                    try {
-                        zip = new ZipInputStream(is); // throws MALFORMED if encoding is incorrect
-                        ZipEntry entry;
-                        while ((entry = zip.getNextEntry()) != null) {
-                            for (Handler h : new ArrayList<>(list)) {
-                                h.nextEntry(entry);
-                                if (h.done)
-                                    list.remove(h);
-                            }
-                        }
-                    } catch (Exception e) {
-                        Log.d(TAG, "zip Error", e);
-                    } finally {
-                        try {
-                            is.close();
-                        } catch (IOException e1) {
-                        }
-                        try {
-                            zip.close();
-                        } catch (IOException e) {
-                        }
-                    }
-                }
-            };
-            thread.start();
-        }
-
-        public void close() {
-            super.close();
-            try {
-                thread.join();
-            } catch (InterruptedException e) {
-                Thread.currentThread().interrupt();
-            }
-        }
-    }
-
-    public static class FileTypeDetectorXml extends FileTypeDetectorIO {
-        ArrayList<Handler> list = new ArrayList<>();
-        Thread thread;
-
-        public static class Handler extends FileTypeDetectorIO.Handler {
-            boolean first = true;
-            String firstTag;
-
-            public Handler(String ext, String firstTag) {
-                super(ext);
-                this.firstTag = firstTag;
-            }
-
-            public void startElement(String uri, String localName, String qName, Attributes attributes) {
-                if (first) {
-                    if (firstTag != null) {
-                        done = true;
-                        if (localName.equals(firstTag)) {
-                            detected = true;
-                        }
-                    }
-                }
-                first = false;
-            }
-
-            @Override
-            public void clear() {
-                super.clear();
-                first = true;
-            }
-        }
-
-        public FileTypeDetectorXml(Detector[] dd) {
-            for (Detector d : dd) {
-                if (d instanceof Handler) {
-                    Handler h = (Handler) d;
-                    h.clear();
-                    list.add(h);
-                }
-            }
-
-            thread = new Thread("xml detector") {
-                @Override
-                public void run() {
-                    try {
-                        SAXParserFactory saxPF = SAXParserFactory.newInstance();
-                        SAXParser saxP = saxPF.newSAXParser();
-                        XMLReader xmlR = saxP.getXMLReader();
-                        DefaultHandler myXMLHandler = new DefaultHandler() {
-                            @Override
-                            public void startElement(String uri, String localName, String qName, Attributes attributes) throws SAXException {
-                                super.startElement(uri, localName, qName, attributes);
-                                for (Handler h : new ArrayList<>(list)) {
-                                    h.startElement(uri, localName, qName, attributes);
-                                    if (h.done)
-                                        list.remove(h);
-                                }
-                            }
-                        };
-                        xmlR.setContentHandler(myXMLHandler);
-                        xmlR.parse(new InputSource(is));
-                    } catch (Exception e) {
-                    } finally {
-                        try {
-                            is.close();
-                        } catch (IOException e) {
-                        }
-                    }
-                }
-            };
-            thread.start();
-        }
-
-        public void close() {
-            super.close();
-            try {
-                thread.join();
-            } catch (InterruptedException e) {
-                Thread.currentThread().interrupt();
-            }
-        }
-    }
-
-    public static class FileFB2 extends FileTypeDetectorXml.Handler {
-        public FileFB2() {
-            super("fb2", "FictionBook");
-        }
-    }
-
-    public static class FileFB2Zip extends FileTypeDetectorZipExtract.Handler {
-        ZipEntry e;
-
-        public FileFB2Zip() {
-            super("fb2");
-        }
-
-        @Override
-        public void nextEntry(ZipEntry entry) {
-            if (Storage.getExt(entry.getName()).toLowerCase().equals("fb2")) {
-                e = entry;
-                detected = true;
-                done = true;
-            }
-        }
-
-        @Override
-        public String extract(File f, File t) {
-            return extract(e, f, t);
-        }
-    }
-
-    public static class FileTxtZip extends FileTypeDetectorZipExtract.Handler {
-        ZipEntry e;
-
-        public FileTxtZip() {
-            super("txt");
-        }
-
-        @Override
-        public void nextEntry(ZipEntry entry) {
-            if (Storage.getExt(entry.getName()).toLowerCase().equals("txt")) {
-                e = entry;
-                detected = true;
-                done = true;
-            }
-        }
-
-        @Override
-        public String extract(File f, File t) {
-            return extract(e, f, t);
-        }
-    }
-
-    public static class FileRTFZip extends FileTypeDetectorZipExtract.Handler {
-        ZipEntry e;
-
-        public FileRTFZip() {
-            super("rtf");
-        }
-
-        @Override
-        public void nextEntry(ZipEntry entry) {
-            if (Storage.getExt(entry.getName()).toLowerCase().equals("rtf")) {
-                e = entry;
-                detected = true;
-                done = true;
-            }
-        }
-
-        @Override
-        public String extract(File f, File t) {
-            return extract(e, f, t);
-        }
-    }
-
-    public static class FileHTMLZip extends FileTypeDetectorZipExtract.Handler {
-        ZipEntry e;
-
-        public FileHTMLZip() {
-            super("html");
-        }
-
-        @Override
-        public void nextEntry(ZipEntry entry) {
-            String ext = Storage.getExt(entry.getName()).toLowerCase();
-            if (ext.equals("html")) {
-                e = entry;
-                detected = true;
-                done = true;
-            }
-        }
-
-        @Override
-        public String extract(File f, File t) {
-            return extract(e, f, t);
-        }
-    }
-
-    public static class FileHTML extends FileTypeDetectorXml.Handler {
-
-        public FileHTML() {
-            super("html", "html");
-        }
-
-    }
-
-    public static class FileEPUB extends FileTypeDetectorZip.Handler {
-        public FileEPUB() {
-            super("epub");
-        }
-
-        @Override
-        public void nextEntry(ZipEntry entry) {
-            if (entry.getName().equals("META-INF/container.xml")) {
-                detected = true;
-                done = true;
-            }
-        }
-    }
-
-    public static class FilePDF extends FileTypeDetector.Handler {
-        public FilePDF() {
-            super("pdf", "%PDF-");
-        }
-    }
-
-    public static class FileDjvu extends FileTypeDetector.Handler {
-        public FileDjvu() {
-            super("djvu", "AT&TF");
-        }
-    }
-
-    public static class FileDoc extends FileTypeDetector.Handler {
-        public FileDoc() {
-            super("doc", new int[]{0xD0, 0xCF, 0x11, 0xE0, 0xA1, 0xB1, 0x1A, 0xE1, 0});
-        }
-    }
-
-    public static class FileRTF extends FileTypeDetector.Handler {
-        public FileRTF() {
-            super("rtf", "{\\rtf1");
-        }
-    }
-
-    public static class FileMobi extends FileTypeDetector.Handler { // PdbReader.cpp
-        byte[] m = "BOOKMOBI".getBytes(Charset.defaultCharset());
-
-        public FileMobi() {
-            super("mobi");
-        }
-
-        @Override
-        public void write(byte[] buf, int off, int len) {
-            super.write(buf, off, len);
-            if (os.size() >= 68) { // 60 offset + 8 len
-                done = true;
-                byte[] head = head(os.toByteArray(), 68);
-                byte[] id = tail(head, 8);
-                detected = equals(id, m);
-            }
-        }
-    }
-
-    public static class FileCbz extends ExtDetector.Handler {
+    public static class FileCbz extends FileTypeDetector.FileZip { // we not treating all zip archives as comics, ext must be cbz
         public FileCbz() {
-            super(ComicsPlugin.EXTZ, new int[]{0x50, 0x4B, 0x03, 0x04});
+            super(ComicsPlugin.EXTZ);
         }
     }
 
-    public static class FileCbr extends ExtDetector.Handler {
+    public static class FileCbr extends FileTypeDetector.FileRar { // we not treating all rar archives as comics, ext must be cbr
         public FileCbr() {
-            super(ComicsPlugin.EXTR, "Rar!");
-        }
-    }
-
-    // https://stackoverflow.com/questions/898669/how-can-i-detect-if-a-file-is-binary-non-text-in-python
-    public static class FileTxt extends FileTypeDetector.Handler {
-        public static final int F = 0; /* character never appears in text */
-        public static final int T = 1; /* character appears in plain ASCII text */
-        public static final int I = 2; /* character appears in ISO-8859 text */
-        public static final int X = 3; /* character appears in non-ISO extended ASCII (Mac, IBM PC) */
-        public static final int R = 4; // lib.ru formatting, ^T and ^U
-
-        // https://github.com/file/file/blob/f2a6e7cb7db9b5fd86100403df6b2f830c7f22ba/src/encoding.c#L151-L228
-        byte[] text_chars = new byte[]
-                {
-                        /*                  BEL BS HT LF VT FF CR    */
-                        F, F, F, F, F, F, F, T, T, T, T, T, T, T, F, F,  /* 0x0X */
-                        /*                              ESC          */
-                        F, F, F, F, R, R, F, F, F, F, F, T, F, F, F, F,  /* 0x1X */
-                        T, T, T, T, T, T, T, T, T, T, T, T, T, T, T, T,  /* 0x2X */
-                        T, T, T, T, T, T, T, T, T, T, T, T, T, T, T, T,  /* 0x3X */
-                        T, T, T, T, T, T, T, T, T, T, T, T, T, T, T, T,  /* 0x4X */
-                        T, T, T, T, T, T, T, T, T, T, T, T, T, T, T, T,  /* 0x5X */
-                        T, T, T, T, T, T, T, T, T, T, T, T, T, T, T, T,  /* 0x6X */
-                        T, T, T, T, T, T, T, T, T, T, T, T, T, T, T, F,  /* 0x7X */
-                        /*            NEL                            */
-                        X, X, X, X, X, T, X, X, X, X, X, X, X, X, X, X,  /* 0x8X */
-                        X, X, X, X, X, X, X, X, X, X, X, X, X, X, X, X,  /* 0x9X */
-                        I, I, I, I, I, I, I, I, I, I, I, I, I, I, I, I,  /* 0xaX */
-                        I, I, I, I, I, I, I, I, I, I, I, I, I, I, I, I,  /* 0xbX */
-                        I, I, I, I, I, I, I, I, I, I, I, I, I, I, I, I,  /* 0xcX */
-                        I, I, I, I, I, I, I, I, I, I, I, I, I, I, I, I,  /* 0xdX */
-                        I, I, I, I, I, I, I, I, I, I, I, I, I, I, I, I,  /* 0xeX */
-                        I, I, I, I, I, I, I, I, I, I, I, I, I, I, I, I   /* 0xfX */
-                };
-
-        public int count = 0;
-
-        public FileTxt() {
-            super("txt");
-        }
-
-        public FileTxt(String ext) {
-            super(ext);
-        }
-
-        @Override
-        public void write(byte[] buf, int off, int len) {
-            int end = off + len;
-            for (int i = off; i < end; i++) {
-                int b = buf[i] & 0xFF;
-                for (int k = 0; k < text_chars.length; k++) {
-                    if (text_chars[b] == F) {
-                        done = true;
-                        detected = false;
-                        return;
-                    }
-                    count++;
-                }
-            }
-            if (count >= 1000) {
-                done = true;
-                detected = true;
-            }
+            super(ComicsPlugin.EXTR);
         }
     }
 
@@ -1250,6 +574,14 @@ public class Storage extends com.github.axet.androidlibrary.app.Storage {
             }
         }
 
+        public int indexOf(Bookmark b) {
+            for (int i = 0; i < size(); i++) {
+                if (get(i).equals(b))
+                    return i;
+            }
+            return -1;
+        }
+
         public ArrayList<Bookmark> getBookmarks(PluginView.Selection.Page page) {
             ArrayList<Bookmark> list = new ArrayList<>();
             for (Bookmark b : this) {
@@ -1281,7 +613,7 @@ public class Storage extends com.github.axet.androidlibrary.app.Storage {
         String s = u.getScheme();
         if (Build.VERSION.SDK_INT >= 21 && s.equals(ContentResolver.SCHEME_CONTENT)) {
             Uri root = Storage.getDocumentTreeUri(u);
-            Uri o = createFile(root, Storage.getDocumentChildPath(u));
+            Uri o = createFile(context, root, Storage.getDocumentChildPath(u));
             ContentResolver resolver = context.getContentResolver();
             ParcelFileDescriptor fd;
             try {
@@ -1337,9 +669,7 @@ public class Storage extends com.github.axet.androidlibrary.app.Storage {
                 }
                 AssetFileDescriptor fd = resolver.openAssetFileDescriptor(uri, "r");
                 InputStream is = new AssetFileDescriptor.AutoCloseInputStream(fd);
-                long len = fd.getDeclaredLength();
-                if (len == AssetFileDescriptor.UNKNOWN_LENGTH)
-                    len = fd.getLength();
+                long len = fd.getLength();
                 is = new BufferedInputStream(is);
                 if (progress != null)
                     is = new ProgresInputstream(is, len, progress);
@@ -1351,29 +681,21 @@ public class Storage extends com.github.axet.androidlibrary.app.Storage {
         } else if (s.startsWith(WebViewCustom.SCHEME_HTTP)) {
             try {
                 InputStream is;
-                if (Build.VERSION.SDK_INT < 11) {
-                    HttpURLConnection conn = HttpClient.openConnection(uri, HttpClient.USER_AGENT);
-                    is = conn.getInputStream();
-                    is = new BufferedInputStream(is);
-                    if (progress != null)
-                        is = new ProgresInputstream(is, conn.getContentLength(), progress);
-                } else {
-                    HttpClient client = new HttpClient();
-                    HttpClient.DownloadResponse w = client.getResponse(null, uri.toString());
-                    if (w.getError() != null)
-                        throw new RuntimeException(w.getError() + ": " + uri);
-                    if (w.contentDisposition != null) {
-                        Pattern cp = Pattern.compile("filename=[\"]*([^\"]*)[\"]*");
-                        Matcher cm = cp.matcher(w.contentDisposition);
-                        if (cm.find()) {
-                            contentDisposition = cm.group(1);
-                            contentDisposition = Storage.getNameNoExt(contentDisposition);
-                        }
+                HttpClient client = new HttpClient();
+                HttpClient.DownloadResponse w = client.getResponse(null, uri.toString());
+                if (w.getError() != null)
+                    throw new RuntimeException(w.getError() + ": " + uri);
+                if (w.contentDisposition != null) {
+                    Pattern cp = Pattern.compile("filename=[\"]*([^\"]*)[\"]*");
+                    Matcher cm = cp.matcher(w.contentDisposition);
+                    if (cm.find()) {
+                        contentDisposition = cm.group(1);
+                        contentDisposition = Storage.getNameNoExt(contentDisposition);
                     }
-                    is = new BufferedInputStream(w.getInputStream());
-                    if (progress != null)
-                        is = new ProgresInputstream(is, w.contentLength, progress);
                 }
+                is = new BufferedInputStream(w.getInputStream());
+                if (progress != null)
+                    is = new ProgresInputstream(is, w.contentLength, progress);
                 book = load(is, uri);
             } catch (IOException e) {
                 throw new RuntimeException(e);
@@ -1392,7 +714,7 @@ public class Storage extends com.github.axet.androidlibrary.app.Storage {
             }
         }
         Uri r = recentUri(book);
-        if (exists(r)) {
+        if (exists(context, r)) {
             try {
                 book.info = new RecentInfo(context, r);
             } catch (RuntimeException e) {
@@ -1410,7 +732,7 @@ public class Storage extends com.github.axet.androidlibrary.app.Storage {
             else
                 book.info.title = Storage.getNameNoExt(uri.getLastPathSegment());
         }
-        if (!exists(r))
+        if (!exists(context, r))
             save(book);
         return book;
     }
@@ -1431,12 +753,11 @@ public class Storage extends com.github.axet.androidlibrary.app.Storage {
 
         String s = storage.getScheme();
 
-        if (Build.VERSION.SDK_INT >= 21 && s.equals(ContentResolver.SCHEME_CONTENT)) {
-            String ss = u.getScheme();
-            if (ss.equals(ContentResolver.SCHEME_CONTENT) && DocumentsContract.getDocumentId(u).startsWith(DocumentsContract.getTreeDocumentId(storage))) // else we can't get from content://storage to real path
+        if (Build.VERSION.SDK_INT >= 21 && s.equals(ContentResolver.SCHEME_CONTENT) && DocumentsContract.isDocumentUri(context, u)) {
+            if (DocumentsContract.getDocumentId(u).startsWith(DocumentsContract.getTreeDocumentId(storage))) // else we can't get from content://storage to real path
                 return new Book(context, DocumentsContract.buildDocumentUriUsingTree(storage, DocumentsContract.getDocumentId(u)));
         }
-        if (s.equals(ContentResolver.SCHEME_FILE) && u.getPath().startsWith(storage.getPath()))
+        if (s.equals(ContentResolver.SCHEME_FILE) && relative(storage.getPath(), u.getPath()) != null)
             return new Book(context, u);
 
         boolean tmp = false;
@@ -1455,15 +776,15 @@ public class Storage extends com.github.axet.androidlibrary.app.Storage {
                 tmp = true;
             }
 
-            Detector[] dd = supported();
+            FileTypeDetector.Detector[] dd = supported();
 
-            book.md5 = detecting(this, dd, is, os, u);
+            book.md5 = FileTypeDetector.detecting(context, dd, is, os, u);
 
-            for (Detector d : dd) {
+            for (FileTypeDetector.Detector d : dd) {
                 if (d.detected) {
                     book.ext = d.ext;
-                    if (d instanceof FileTypeDetectorZipExtract.Handler) {
-                        FileTypeDetectorZipExtract.Handler e = (FileTypeDetectorZipExtract.Handler) d;
+                    if (d instanceof FileTypeDetector.FileTypeDetectorZipExtract.Handler) {
+                        FileTypeDetector.FileTypeDetectorZipExtract.Handler e = (FileTypeDetector.FileTypeDetectorZipExtract.Handler) d;
                         if (!tmp) { // !tmp
                             File z = file;
                             file = createTempBook("tmp");
@@ -1484,11 +805,9 @@ public class Storage extends com.github.axet.androidlibrary.app.Storage {
                 throw new RuntimeException("Unsupported format");
 
             if (book.ext.equals(ComicsPlugin.EXTR)) { // handling cbz solid archives
-                final FileInputStream fis = new FileInputStream(file);
-                final FileChannel fc = fis.getChannel();
                 File cbz = null;
                 try {
-                    final Archive archive = new Archive(new ComicsPlugin.RarStore(fc));
+                    final Archive archive = new Archive(new NativeStorage(file));
                     if (archive.getMainHeader().isSolid()) {
                         cbz = createTempBook("tmp");
                         OutputStream zos = new FileOutputStream(cbz);
@@ -1530,12 +849,12 @@ public class Storage extends com.github.axet.androidlibrary.app.Storage {
                         String e = Storage.getExt(t);
                         if (n.equals(book.md5) && !e.equals(JSON_EXT)) { // delete all but json
                             Uri k = DocumentsContract.buildDocumentUriUsingTree(childrenUri, id);
-                            delete(k);
+                            delete(context, k);
                         }
                     }
                 }
                 String id = book.md5 + "." + book.ext;
-                Uri o = createFile(storage, id);
+                Uri o = createFile(context, storage, id);
                 ContentResolver resolver = context.getContentResolver();
 
                 ParcelFileDescriptor fd = resolver.openFileDescriptor(o, "rw");
@@ -1602,7 +921,7 @@ public class Storage extends com.github.axet.androidlibrary.app.Storage {
     public void load(Book book) {
         if (book.info == null) {
             Uri r = recentUri(book);
-            if (exists(r))
+            if (exists(context, r))
                 try {
                     book.info = new RecentInfo(context, r);
                 } catch (RuntimeException e) {
@@ -1639,7 +958,7 @@ public class Storage extends com.github.axet.androidlibrary.app.Storage {
                 image = p.getRealImage();
             }
             if (image instanceof ZLStreamImage) {
-                bm = BitmapFactory.decodeStream(((ZLStreamImage) image).inputStream());
+                bm = CacheImagesAdapter.createScaled(((ZLStreamImage) image).inputStream());
             }
             if (image instanceof ZLBitmapImage) {
                 bm = ((ZLBitmapImage) image).getBitmap();
@@ -1663,15 +982,12 @@ public class Storage extends com.github.axet.androidlibrary.app.Storage {
             if (bm == null)
                 return;
             try {
-                float ratio = COVER_SIZE / (float) bm.getWidth();
-                Bitmap sbm = Bitmap.createScaledBitmap(bm, (int) (bm.getWidth() * ratio), (int) (bm.getHeight() * ratio), true);
-                if (sbm != bm)
-                    bm.recycle();
+                bm = CacheImagesAdapter.createScaled(bm);
                 OutputStream os = new FileOutputStream(cover);
                 os = new BufferedOutputStream(os);
-                sbm.compress(Bitmap.CompressFormat.PNG, 100, os);
+                bm.compress(Bitmap.CompressFormat.PNG, 100, os);
                 os.close();
-                sbm.recycle();
+                bm.recycle();
             } catch (IOException e) {
                 throw new RuntimeException(e);
             }
@@ -1686,7 +1002,7 @@ public class Storage extends com.github.axet.androidlibrary.app.Storage {
         int hs = View.MeasureSpec.makeMeasureSpec(h, View.MeasureSpec.EXACTLY);
         v.measure(ws, hs);
         v.layout(0, 0, v.getMeasuredWidth(), v.getMeasuredHeight());
-        Bitmap bm = Bitmap.createBitmap(w, h, Bitmap.Config.ARGB_8888);
+        Bitmap bm = Bitmap.createBitmap(w, h, Bitmap.Config.RGB_565);
         Canvas c = new Canvas(bm);
         v.draw(c);
         return bm;
@@ -1703,8 +1019,8 @@ public class Storage extends com.github.axet.androidlibrary.app.Storage {
                 e = e.toLowerCase();
                 if (n.length() != MD5_SIZE)
                     return false;
-                Detector[] dd = supported();
-                for (Detector d : dd) {
+                FileTypeDetector.Detector[] dd = supported();
+                for (FileTypeDetector.Detector d : dd) {
                     if (e.equals(d.ext))
                         return true;
                 }
@@ -1740,7 +1056,7 @@ public class Storage extends com.github.axet.androidlibrary.app.Storage {
         Uri uri = getStoragePath();
         ArrayList<Book> list = new ArrayList<>();
         String s = uri.getScheme();
-        if (Build.VERSION.SDK_INT >= 21 && s.startsWith(ContentResolver.SCHEME_CONTENT)) {
+        if (Build.VERSION.SDK_INT >= 21 && s.equals(ContentResolver.SCHEME_CONTENT)) {
             ContentResolver contentResolver = context.getContentResolver();
             Uri childrenUri = DocumentsContract.buildChildDocumentsUriUsingTree(uri, DocumentsContract.getTreeDocumentId(uri));
             Cursor childCursor = contentResolver.query(childrenUri, null, null, null, null);
@@ -1755,18 +1071,18 @@ public class Storage extends com.github.axet.androidlibrary.app.Storage {
                             String n = Storage.getNameNoExt(t);
                             if (n.length() != MD5_SIZE)
                                 continue;
-                            Detector[] dd = supported();
-                            for (Detector d : dd) {
+                            FileTypeDetector.Detector[] dd = supported();
+                            for (FileTypeDetector.Detector d : dd) {
                                 if (t.endsWith("." + d.ext)) {
                                     Uri k = DocumentsContract.buildDocumentUriUsingTree(uri, id);
                                     Book b = new Book();
-                                    b.md5 = getNameNoExt(k);
+                                    b.md5 = getNameNoExt(context, k);
                                     b.url = k;
                                     File cover = coverFile(context, b);
                                     if (cover.exists())
                                         b.cover = cover;
                                     Uri r = recentUri(b);
-                                    if (exists(r)) {
+                                    if (exists(context, r)) {
                                         try {
                                             b.info = new RecentInfo(context, r);
                                         } catch (RuntimeException e) {
@@ -1787,7 +1103,7 @@ public class Storage extends com.github.axet.androidlibrary.app.Storage {
                     childCursor.close();
                 }
             }
-        } else if (s.startsWith(ContentResolver.SCHEME_FILE)) {
+        } else if (s.equals(ContentResolver.SCHEME_FILE)) {
             File dir = getFile(uri);
             list(list, dir);
         } else {
@@ -1797,11 +1113,11 @@ public class Storage extends com.github.axet.androidlibrary.app.Storage {
     }
 
     public void delete(final Book book) {
-        delete(book.url);
+        delete(context, book.url);
         if (book.cover != null)
             book.cover.delete();
 
-        delete(recentUri(book));
+        delete(context, recentUri(book));
 
         // delete all md5.* files (old, cover images, and sync conflicts files)
         Uri storage = getStoragePath();
@@ -1817,7 +1133,7 @@ public class Storage extends com.github.axet.androidlibrary.app.Storage {
                         String t = childCursor.getString(childCursor.getColumnIndex(DocumentsContract.Document.COLUMN_DISPLAY_NAME));
                         if (t.startsWith(book.md5)) { // delete all but json
                             Uri k = DocumentsContract.buildDocumentUriUsingTree(storage, id);
-                            delete(k);
+                            delete(context, k);
                         }
                     }
                 } finally {
@@ -1852,7 +1168,7 @@ public class Storage extends com.github.axet.androidlibrary.app.Storage {
 
             String s = b.url.getScheme();
             if (s.equals(ContentResolver.SCHEME_CONTENT)) {
-                String ext = getExt(b.url);
+                String ext = getExt(context, b.url);
                 fbook.tmp = createTempBook(ext);
                 OutputStream os = new FileOutputStream(fbook.tmp);
                 os = new BufferedOutputStream(os);
@@ -1870,17 +1186,17 @@ public class Storage extends com.github.axet.androidlibrary.app.Storage {
 
             String ext = getExt(file).toLowerCase();
             if (ext.equals(Storage.ZIP_EXT)) { // handle zip files manually, better perfomance
-                Detector[] dd = supported();
+                FileTypeDetector.Detector[] dd = supported();
                 try {
                     InputStream is = new FileInputStream(file);
-                    Storage.detecting(this, dd, is, null, Uri.fromFile(file));
+                    FileTypeDetector.detecting(context, dd, is, null, Uri.fromFile(file));
                 } catch (IOException | NoSuchAlgorithmException e) {
                     throw new RuntimeException(e);
                 }
-                for (Storage.Detector d : dd) {
+                for (FileTypeDetector.Detector d : dd) {
                     if (d.detected) {
-                        if (d instanceof FileTypeDetectorZipExtract.Handler) {
-                            FileTypeDetectorZipExtract.Handler e = (FileTypeDetectorZipExtract.Handler) d;
+                        if (d instanceof FileTypeDetector.FileTypeDetectorZipExtract.Handler) {
+                            FileTypeDetector.FileTypeDetectorZipExtract.Handler e = (FileTypeDetector.FileTypeDetectorZipExtract.Handler) d;
                             if (fbook.tmp == null) { // !tmp
                                 File z = file;
                                 file = createTempBook(d.ext);
@@ -1922,42 +1238,7 @@ public class Storage extends com.github.axet.androidlibrary.app.Storage {
             return getStoragePath(path);
     }
 
-    public static void migrateLocalStorageDialog(final Context context, final Handler handler, final Storage storage) {
-        int dp10 = ThemeUtils.dp2px(context, 10);
-        ProgressBar progress = new ProgressBar(context);
-        progress.setIndeterminate(true);
-        progress.setPadding(dp10, dp10, dp10, dp10);
-        AlertDialog.Builder b = new AlertDialog.Builder(context);
-        b.setTitle("Migrating data");
-        b.setView(progress);
-        b.setCancelable(false);
-        final AlertDialog dialog = b.create();
-        final Thread thread = new Thread(new Runnable() {
-            @Override
-            public void run() {
-                try {
-                    storage.migrateLocalStorage();
-                } catch (final RuntimeException e) {
-                    Log.d(TAG, "migrate error", e);
-                    handler.post(new Runnable() {
-                        @Override
-                        public void run() {
-                            Toast.makeText(context, e.getMessage(), Toast.LENGTH_LONG).show();
-                        }
-                    });
-                }
-                handler.post(new Runnable() {
-                    @Override
-                    public void run() {
-                        dialog.cancel();
-                    }
-                });
-            }
-        });
-        dialog.show();
-        thread.start();
-    }
-
+    @Override
     public void migrateLocalStorage() {
         migrateLocalStorage(getLocalInternal());
         migrateLocalStorage(getLocalExternal());
@@ -1998,29 +1279,29 @@ public class Storage extends com.github.axet.androidlibrary.app.Storage {
             if (e.equals(JSON_EXT))
                 m = true;
             else {
-                Detector[] dd = supported();
-                for (Detector d : dd) {
+                FileTypeDetector.Detector[] dd = supported();
+                for (FileTypeDetector.Detector d : dd) {
                     if (e.equals(d.ext))
                         m = true;
                 }
             }
             if (m)
-                migrate(f, path);
+                migrate(context, f, path);
         }
     }
 
     public Uri move(Uri u, Uri dir) {
         try {
-            Uri n = getNextFile(getStoragePath(), getName(u), Storage.JSON_EXT);
+            Uri n = getNextFile(context, getStoragePath(), getName(context, u), Storage.JSON_EXT);
             InputStream is;
             OutputStream os;
             String s = u.getScheme();
-            if (Build.VERSION.SDK_INT >= 21 && s.startsWith(ContentResolver.SCHEME_CONTENT)) {
+            if (Build.VERSION.SDK_INT >= 21 && s.equals(ContentResolver.SCHEME_CONTENT)) {
                 ContentResolver resolver = getContext().getContentResolver();
                 is = resolver.openInputStream(u);
-                n = createFile(dir, Storage.getDocumentChildPath(n));
+                n = createFile(context, dir, Storage.getDocumentChildPath(n));
                 os = resolver.openOutputStream(n);
-            } else if (s.startsWith(ContentResolver.SCHEME_FILE)) {
+            } else if (s.equals(ContentResolver.SCHEME_FILE)) {
                 is = new FileInputStream(Storage.getFile(u));
                 os = new FileOutputStream(Storage.getFile(n));
                 os = new BufferedOutputStream(os);
@@ -2030,7 +1311,7 @@ public class Storage extends com.github.axet.androidlibrary.app.Storage {
             IOUtils.copy(is, os);
             is.close();
             os.close();
-            delete(u);
+            delete(context, u);
             return n;
         } catch (IOException e) {
             throw new RuntimeException(e);

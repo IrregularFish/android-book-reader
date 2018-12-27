@@ -10,12 +10,12 @@ import android.content.Context;
 import android.content.DialogInterface;
 import android.content.Intent;
 import android.content.SharedPreferences;
+import android.content.pm.PackageManager;
+import android.content.pm.ResolveInfo;
 import android.content.res.Configuration;
 import android.graphics.Bitmap;
 import android.graphics.Canvas;
 import android.graphics.Color;
-import android.graphics.Paint;
-import android.graphics.PointF;
 import android.graphics.Rect;
 import android.graphics.drawable.Drawable;
 import android.net.Uri;
@@ -26,13 +26,11 @@ import android.os.Parcel;
 import android.os.Parcelable;
 import android.support.annotation.NonNull;
 import android.support.v4.view.GestureDetectorCompat;
-import android.support.v4.view.ScaleGestureDetectorCompat;
 import android.support.v4.view.ViewCompat;
 import android.support.v4.widget.DrawerLayout;
 import android.support.v7.app.AlertDialog;
 import android.support.v7.widget.DividerItemDecoration;
 import android.support.v7.widget.LinearLayoutManager;
-import android.support.v7.widget.LinearSmoothScroller;
 import android.support.v7.widget.PopupMenu;
 import android.support.v7.widget.RecyclerView;
 import android.text.ClipboardManager;
@@ -42,7 +40,6 @@ import android.view.Gravity;
 import android.view.KeyEvent;
 import android.view.MenuItem;
 import android.view.MotionEvent;
-import android.view.ScaleGestureDetector;
 import android.view.View;
 import android.view.ViewGroup;
 import android.view.Window;
@@ -55,9 +52,10 @@ import android.widget.RelativeLayout;
 import android.widget.TextView;
 
 import com.github.axet.androidlibrary.net.HttpClient;
-import com.github.axet.androidlibrary.services.FileProvider;
 import com.github.axet.androidlibrary.widgets.AboutPreferenceCompat;
+import com.github.axet.androidlibrary.widgets.PinchView;
 import com.github.axet.androidlibrary.widgets.ThemeUtils;
+import com.github.axet.androidlibrary.widgets.TopAlwaysSmoothScroller;
 import com.github.axet.bookreader.R;
 import com.github.axet.bookreader.app.BookApplication;
 import com.github.axet.bookreader.app.ComicsPlugin;
@@ -83,7 +81,6 @@ import org.geometerplus.fbreader.bookmodel.BookModel;
 import org.geometerplus.fbreader.bookmodel.FBHyperlinkType;
 import org.geometerplus.fbreader.bookmodel.TOCTree;
 import org.geometerplus.fbreader.fbreader.ActionCode;
-import org.geometerplus.fbreader.fbreader.DictionaryHighlighting;
 import org.geometerplus.fbreader.fbreader.FBAction;
 import org.geometerplus.fbreader.fbreader.FBView;
 import org.geometerplus.fbreader.fbreader.options.ColorProfile;
@@ -197,6 +194,16 @@ public class FBReaderView extends RelativeLayout {
         } else {
             p.removeView(areas);
         }
+    }
+
+    public static Intent translateIntent(String text) {
+        Intent intent = new Intent();
+        intent.setAction(Intent.ACTION_PROCESS_TEXT);
+        intent.setType(HttpClient.CONTENTTYPE_TEXT);
+        intent.setPackage("com.google.android.apps.translate"); // only known translator
+        intent.putExtra(Intent.EXTRA_PROCESS_TEXT, text);
+        intent.putExtra(Intent.EXTRA_PROCESS_TEXT_READONLY, true);
+        return intent;
     }
 
     public static Rect findUnion(List<ZLTextElementArea> areas, Storage.Bookmark bm) {
@@ -1055,7 +1062,6 @@ public class FBReaderView extends RelativeLayout {
                 TextView progressText;
                 Bitmap bm; // cache bitmap
                 PageCursor cache; // cache cursor
-                Paint paint = new Paint(); // cache paint
 
                 ZLTextElementAreaVector text;
                 Reflow.Info info;
@@ -1214,8 +1220,8 @@ public class FBReaderView extends RelativeLayout {
                                     Bitmap bm = pluginview.reflower.render(c.start.getElementIndex());
                                     Rect src = new Rect(0, 0, bm.getWidth(), bm.getHeight());
                                     Rect dst = new Rect(app.BookTextView.getLeftMargin(), 0, app.BookTextView.getLeftMargin() + pluginview.reflower.rw, pluginview.reflower.h);
-                                    canvas.drawColor(Color.WHITE);
-                                    canvas.drawBitmap(bm, src, dst, pluginview.paint);
+                                    canvas.drawColor(Color.WHITE); // cache color always white
+                                    canvas.drawBitmap(bm, src, dst, null); // cache paint always clean
                                     info = new Reflow.Info(pluginview.reflower, c.start.getElementIndex());
                                 } else { // empty source page?
                                     pluginview.drawWallpaper(canvas);
@@ -1305,7 +1311,7 @@ public class FBReaderView extends RelativeLayout {
                 void drawCache(Canvas draw) {
                     Rect src = new Rect(0, 0, bm.getWidth(), bm.getHeight());
                     Rect dst = new Rect(0, 0, getWidth(), getHeight());
-                    draw.drawBitmap(bm, src, dst, paint);
+                    draw.drawBitmap(bm, src, dst, pluginview.paint);
                 }
 
                 Canvas getCanvas(PageCursor c) {
@@ -1781,68 +1787,6 @@ public class FBReaderView extends RelativeLayout {
             }
         }
 
-        class TopSnappedSmoothScroller extends LinearSmoothScroller {
-            public TopSnappedSmoothScroller(Context context) {
-                super(context);
-            }
-
-            @Override
-            public PointF computeScrollVectorForPosition(int targetPosition) {
-                return lm.computeScrollVectorForPosition(targetPosition);
-            }
-
-            @Override
-            protected int getVerticalSnapPreference() {
-                return SNAP_TO_ANY;
-            }
-
-            @Override
-            public int calculateDtToFit(int viewStart, int viewEnd, int boxStart, int boxEnd, int
-                    snapPreference) {
-                switch (snapPreference) {
-                    case SNAP_TO_START:
-                        return boxStart - viewStart;
-                    case SNAP_TO_END:
-                        return boxEnd - viewEnd;
-                    case SNAP_TO_ANY:
-                        int dtBox = boxEnd - boxStart;
-                        int dtView = viewEnd - viewStart;
-                        if (dtBox < dtView) {
-                            return -viewStart;
-                        }
-                        final int dtStart = boxStart - viewStart;
-                        if (dtStart > 0) {
-                            return dtStart;
-                        }
-                        final int dtEnd = boxEnd - viewEnd;
-                        if (dtEnd < 0) {
-                            return dtEnd;
-                        }
-                        break;
-                    default:
-                        throw new IllegalArgumentException("snap preference should be one of the"
-                                + " constants defined in SmoothScroller, starting with SNAP_");
-                }
-                return 0;
-            }
-        }
-
-        class TopAlwaysSmoothScroller extends LinearSmoothScroller {
-            public TopAlwaysSmoothScroller(Context context) {
-                super(context);
-            }
-
-            @Override
-            public PointF computeScrollVectorForPosition(int targetPosition) {
-                return lm.computeScrollVectorForPosition(targetPosition);
-            }
-
-            @Override
-            protected int getVerticalSnapPreference() {
-                return SNAP_TO_START;
-            }
-        }
-
         public ScrollView(Context context) {
             super(context);
 
@@ -1932,6 +1876,7 @@ public class FBReaderView extends RelativeLayout {
             return union;
         }
 
+        @Override
         public void reset() {
             postInvalidate();
         }
@@ -2698,105 +2643,49 @@ public class FBReaderView extends RelativeLayout {
         }
     }
 
-    public class PinchGesture implements ScaleGestureDetector.OnScaleGestureListener {
-        ScaleGestureDetector scale;
-        boolean scaleTouch = false;
-        PinchView pinch;
-        Context context;
-
+    public class PinchGesture extends com.github.axet.androidlibrary.widgets.PinchGesture {
         public PinchGesture(Context context) {
-            this.context = context;
-            scale = new ScaleGestureDetector(context, this);
-            ScaleGestureDetectorCompat.setQuickScaleEnabled(scale, false);
+            super(context);
         }
 
-        boolean isScaleTouch(MotionEvent e) {
-            if (pinch != null)
-                return true;
+        public boolean isScaleTouch(MotionEvent e) {
             if (pluginview == null || pluginview.reflow)
                 return false;
-            if (e.getPointerCount() >= 2) {
-                return true;
-            }
-            return false;
-        }
-
-        public boolean onTouchEvent(MotionEvent e) {
-            if (isScaleTouch(e)) {
-                if (scaleTouch && (e.getAction() == MotionEvent.ACTION_UP || e.getAction() == MotionEvent.ACTION_DOWN) && e.getPointerCount() == 1)
-                    scaleTouch = false;
-                if (e.getPointerCount() == 2)
-                    scaleTouch = true;
-                scale.onTouchEvent(e);
-                if (pinch != null) {
-                    if (!scaleTouch)
-                        pinch.onTouchEvent(e);
-                    return true;
-                }
-                return true;
-            }
-            return false;
-        }
-
-        @Override
-        public boolean onScale(ScaleGestureDetector detector) {
-            scaleTouch = true;
-            if (pinch == null)
-                return false;
-            pinch.onScale(detector);
-            return true;
-        }
-
-        @Override
-        public boolean onScaleBegin(ScaleGestureDetector detector) {
-            scaleTouch = true;
-            if (pinch == null) {
-                float x = detector.getFocusX();
-                float y = detector.getFocusY();
-                onScaleBegin(x, y);
-            }
-            pinch.start = detector.getCurrentSpan();
-            return true;
-        }
-
-        public void onScaleBegin(float x, float y) {
-        }
-
-        @Override
-        public void onScaleEnd(ScaleGestureDetector detector) {
-            scaleTouch = true;
-            if (isPinch()) { // double end?
-                pinch.onScaleEnd();
-                if (pinch.end < 0)
-                    pinchClose();
-            }
-        }
-
-        public boolean isPinch() {
-            return pinch != null;
+            return super.isScaleTouch(e);
         }
 
         public void pinchOpen(int page, Rect v) {
             Bitmap bm = pluginview.render(v.width(), v.height(), page);
             pinch = new PinchView(context, v, bm) {
+                public int clip;
+
+                {
+                    if (widget instanceof ScrollView)
+                        clip = ((ScrollView) widget).getMainAreaHeight();
+                    else
+                        clip = ((ZLAndroidWidget) widget).getMainAreaHeight();
+                }
+
                 @Override
                 public void pinchClose() {
                     PinchGesture.this.pinchClose();
                 }
+
+                @Override
+                protected void dispatchDraw(Canvas canvas) {
+                    Rect c = canvas.getClipBounds();
+                    c.bottom = clip - getTop();
+                    canvas.clipRect(c);
+                    super.dispatchDraw(canvas);
+                }
             };
-            if (widget instanceof ScrollView)
-                pinch.clip = ((ScrollView) widget).getMainAreaHeight();
-            else
-                pinch.clip = ((ZLAndroidWidget) widget).getMainAreaHeight();
             FBReaderView.this.addView(pinch, new LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
         }
 
         public void pinchClose() {
-            if (pinch != null) {
+            if (pinch != null)
                 FBReaderView.this.removeView(pinch);
-                pinch.close();
-                pinch = null;
-            }
+            super.pinchClose();
         }
     }
 
@@ -3112,7 +3001,12 @@ public class FBReaderView extends RelativeLayout {
                 public void createControlPanel(Activity activity, RelativeLayout root) {
                     super.createControlPanel(activity, root);
                     View t = myWindow.findViewById(org.geometerplus.zlibrary.ui.android.R.id.selection_panel_translate);
-                    t.setVisibility(View.GONE);
+                    PackageManager packageManager = getContext().getPackageManager();
+                    List<ResolveInfo> rr = packageManager.queryIntentActivities(translateIntent(null), 0);
+                    if (rr.isEmpty())
+                        t.setVisibility(View.GONE);
+                    else
+                        t.setVisibility(View.VISIBLE);
                 }
             };
         }
@@ -3470,26 +3364,17 @@ public class FBReaderView extends RelativeLayout {
                         public boolean onMenuItemClick(MenuItem item) {
                             switch (item.getItemId()) {
                                 case R.id.action_open: {
-                                    String t = image.ImageElement.Id;
-                                    String type = Storage.getTypeByExt(ImagesProvider.EXT);
-                                    Uri uri = ImagesProvider.getProvider().share(Uri.parse(image.ImageElement.URL), t);
-                                    Intent intent = new Intent(Intent.ACTION_VIEW);
-                                    intent.setDataAndType(uri, type);
-                                    FileProvider.grantPermissions(getContext(), intent, Intent.FLAG_GRANT_READ_URI_PERMISSION | Intent.FLAG_GRANT_WRITE_URI_PERMISSION);
+                                    String name = image.ImageElement.Id;
+                                    Uri uri = Uri.parse(image.ImageElement.URL);
+                                    Intent intent = ImagesProvider.getProvider().openIntent(uri, name);
                                     getContext().startActivity(intent);
                                     break;
                                 }
                                 case R.id.action_share: {
-                                    String t = image.ImageElement.Id;
+                                    String name = image.ImageElement.Id;
                                     String type = Storage.getTypeByExt(ImagesProvider.EXT);
-                                    Uri uri = ImagesProvider.getProvider().share(Uri.parse(image.ImageElement.URL), t);
-                                    Intent intent = new Intent(Intent.ACTION_SEND);
-                                    intent.setType(type);
-                                    intent.putExtra(Intent.EXTRA_EMAIL, "");
-                                    intent.putExtra(Intent.EXTRA_SUBJECT, Storage.getTitle(book.info) + " (" + t + ")");
-                                    intent.putExtra(Intent.EXTRA_TEXT, getContext().getString(R.string.shared_via, getContext().getString(R.string.app_name)));
-                                    intent.putExtra(Intent.EXTRA_STREAM, uri);
-                                    FileProvider.grantPermissions(getContext(), intent, Intent.FLAG_GRANT_READ_URI_PERMISSION | Intent.FLAG_GRANT_WRITE_URI_PERMISSION);
+                                    Uri uri = Uri.parse(image.ImageElement.URL);
+                                    Intent intent = ImagesProvider.getProvider().shareIntent(uri, name, type, Storage.getTitle(book.info) + " (" + name + ")");
                                     getContext().startActivity(intent);
                                     break;
                                 }
@@ -3648,9 +3533,7 @@ public class FBReaderView extends RelativeLayout {
         app.addAction(ActionCode.SELECTION_TRANSLATE, new FBAction(app) {
             @Override
             protected void run(Object... params) {
-                final DictionaryHighlighting dictionaryHilite = DictionaryHighlighting.get(app.BookTextView);
-
-                String text;
+                final String text;
 
                 if (selection != null) {
                     text = selection.selection.getText();
@@ -3661,22 +3544,9 @@ public class FBReaderView extends RelativeLayout {
                     text = snippet.getText();
                 }
 
-                if (dictionaryHilite == null)
-                    return;
+                Intent intent = translateIntent(text);
+                getContext().startActivity(intent);
 
-                DictionaryUtil.openTextInDictionary(
-                        a,
-                        text,
-                        app.BookTextView.getCountOfSelectedWords() == 1,
-                        app.BookTextView.getSelectionStartY(),
-                        app.BookTextView.getSelectionEndY(),
-                        new Runnable() {
-                            public void run() {
-                                app.BookTextView.addHighlighting(dictionaryHilite);
-                                widget.repaint();
-                            }
-                        }
-                );
                 app.BookTextView.clearSelection();
                 selectionClose();
             }
@@ -4024,6 +3894,18 @@ public class FBReaderView extends RelativeLayout {
             ((ScrollView) widget).adapter.reset();
             if (pluginview != null)
                 ((ScrollView) widget).updateOverlays();
+        } else {
+            widget.reset();
+            widget.repaint();
+        }
+    }
+
+    public void updateTheme() {
+        if (pluginview != null)
+            pluginview.updateTheme();
+        if (widget instanceof ScrollView) {
+            ((ScrollView) widget).requestLayout(); // repaint views
+            ((ScrollView) widget).reset();
         } else {
             widget.reset();
             widget.repaint();

@@ -28,9 +28,11 @@ import android.widget.ProgressBar;
 import android.widget.TextView;
 import android.widget.Toast;
 
+import com.github.axet.androidlibrary.app.FileTypeDetector;
 import com.github.axet.androidlibrary.crypto.MD5;
 import com.github.axet.androidlibrary.widgets.AboutPreferenceCompat;
 import com.github.axet.androidlibrary.widgets.CacheImagesAdapter;
+import com.github.axet.androidlibrary.widgets.ErrorDialog;
 import com.github.axet.androidlibrary.widgets.OpenFileDialog;
 import com.github.axet.androidlibrary.widgets.SearchView;
 import com.github.axet.bookreader.R;
@@ -102,16 +104,16 @@ public class LocalLibraryFragment extends Fragment implements MainActivity.Searc
         void show(Uri u) {
             if (old == null)
                 old = Snackbar.make(getActivity().findViewById(android.R.id.content), "", Snackbar.LENGTH_SHORT);
-            old.setText(storage.getDisplayName(u));
+            old.setText(Storage.getDisplayName(getContext(), u));
             old.show();
         }
     };
 
     public static String getPath(Context context, Uri uri) { // display purpose
         String s = uri.getScheme();
-        if (s.startsWith(ContentResolver.SCHEME_CONTENT)) {
+        if (s.equals(ContentResolver.SCHEME_CONTENT)) {
             return Storage.getDocumentPath(context, uri);
-        } else if (s.startsWith(ContentResolver.SCHEME_FILE)) {
+        } else if (s.equals(ContentResolver.SCHEME_FILE)) {
             File f = Storage.getFile(uri);
             return f.getPath();
         } else {
@@ -228,7 +230,7 @@ public class LocalLibraryFragment extends Fragment implements MainActivity.Searc
                 n = n.substring(r);
                 m = new File(n);
             } else if (Build.VERSION.SDK_INT >= 21 && s.equals(ContentResolver.SCHEME_CONTENT)) {
-                m = new File(storage.buildDocumentPath(root, u));
+                m = new File(Storage.buildDocumentPath(getContext(), root, u));
             } else {
                 throw new Storage.UnknownUri();
             }
@@ -376,7 +378,7 @@ public class LocalLibraryFragment extends Fragment implements MainActivity.Searc
                 Book book = (Book) task.item;
                 String md5 = MD5.digest(book.url.toString());
                 book.md5 = md5; // url md5, not file content!
-                book.ext = storage.getExt(book.url).toLowerCase();
+                book.ext = Storage.getExt(getContext(), book.url).toLowerCase();
                 File r = recentFile(book);
                 if (r.exists()) {
                     try {
@@ -551,7 +553,7 @@ public class LocalLibraryFragment extends Fragment implements MainActivity.Searc
                     Book b = (Book) i;
                     loadBook(b);
                 } catch (RuntimeException e) {
-                    main.Error(e);
+                    ErrorDialog.Error(main, e);
                 }
             }
         });
@@ -598,7 +600,7 @@ public class LocalLibraryFragment extends Fragment implements MainActivity.Searc
     }
 
     void walk(Uri root, Uri uri) {
-        ArrayList<Storage.Node> nn = storage.walk(root, uri);
+        ArrayList<Storage.Node> nn = Storage.walk(getContext(), root, uri);
         Collections.sort(nn, new FilesFirst());
         for (Storage.Node n : nn) {
             if (n.uri.equals(uri))
@@ -607,8 +609,8 @@ public class LocalLibraryFragment extends Fragment implements MainActivity.Searc
                 calc.add(n.uri);
             } else {
                 String ext = Storage.getExt(n.name).toLowerCase(Locale.US);
-                Storage.Detector[] dd = Storage.supported();
-                for (Storage.Detector d : dd) {
+                FileTypeDetector.Detector[] dd = Storage.supported();
+                for (FileTypeDetector.Detector d : dd) {
                     if (ext.equals(d.ext)) {
                         books.all.add(new Book(books.getFolder(root, n.uri), n.uri));
                         break;
@@ -617,12 +619,12 @@ public class LocalLibraryFragment extends Fragment implements MainActivity.Searc
                 if (ext.equals(Storage.ZIP_EXT)) {
                     try {
                         InputStream is = books.open(n.uri);
-                        Storage.detecting(storage, dd, is, null, n.uri);
+                        FileTypeDetector.detecting(getContext(), dd, is, null, n.uri);
                         is.close();
                     } catch (IOException | NoSuchAlgorithmException e) {
                         throw new RuntimeException(e);
                     }
-                    for (Storage.Detector d : dd) {
+                    for (FileTypeDetector.Detector d : dd) {
                         if (d.detected) {
                             Book book = new Book(books.getFolder(root, n.uri), n.uri);
                             book.ext = d.ext;
