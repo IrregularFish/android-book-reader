@@ -1,6 +1,8 @@
 # Book Reader
 
-Book Reader simple UI. Based on many open-source projects:
+
+
+Book Reader simple UI imported from axet on gitlab. Based on many open-source projects:
 
   * FBReader (https://gitlab.com/axet/android-fbreader-library)
   * Pdfium (https://gitlab.com/axet/android-pdfium)
