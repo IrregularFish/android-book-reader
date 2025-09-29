@@ -1,10 +1,11 @@
 # Book Reader
 
 
-**This is not my original project**
+##This is not my original project
+
 Book Reader was originally created by axet on gitlab. the original project can be found at https://gitlab.com/axet/android-book-reader
 
-Huge thanks to axet for this project!
+**Huge thanks to axet for this project!**
 
 Book Reader simple UI imported from axet on gitlab. Based on many open-source projects:
 
