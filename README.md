@@ -1,7 +1,7 @@
 # Book Reader
 
 
-##This is not my original project
+**This is not my original project**
 
 Book Reader was originally created by axet on gitlab. the original project can be found at https://gitlab.com/axet/android-book-reader
 
